@@ -727,66 +727,39 @@ describe('an attempt whose feedback exposure is uncertain never reaches the top 
 
 // ---------------------------------------------------------------------------
 // The view's wiring (source-level: modal.ts cannot load under Vitest)
+//
+// `[D-603]` (`ol-egov.141.89.6.129`): in v0.9 nothing is graded, so the view seals no graded
+// attempt's rung and reads no prior state when a question is resolved. What it keeps of this
+// module is the session note, written when the passages are about to be shown; the practice
+// explanation's writer reads her log itself, at write time, for the support shown before each
+// answer (D7.1). The rules above stay, for when grading returns (the F5 heading note).
 // ---------------------------------------------------------------------------
 
-describe('the view reads the exposure once, when the question is resolved, and seals it at submit', () => {
-  it('resolves the prior state for an instrument-seeded question before the answering phase appears', () => {
+describe('the v0.9 view notes the exposure for the session when the passages are shown, and seals nothing', () => {
+  it('resolving a question reads no prior state: neither an instrument-seeded question nor a free-form topic', () => {
     const resolve = modal.slice(
       modal.indexOf('private async resolveInstrumentPrompt('),
-      modal.indexOf('private async resolveTopicPrompt('),
+      modal.indexOf('private enterNewQuestion('),
     );
-    expect(resolve).toMatch(
-      /this\.priorAttemptState = await resolvePriorAttemptState\(\{[\s\S]*?instrumentId: prompt\.originInstrumentId,[\s\S]*?readLogged: this\.deps\.readLoggedAttemptState,/,
+    expect(resolve).not.toMatch(
+      /resolvePriorAttemptState|readLoggedAttemptState|priorAttemptState/,
     );
-    const awaitAt = resolve.indexOf('this.priorAttemptState = await');
-    const answeringAt = resolve.indexOf("this.state = { phase: 'answering'");
-    expect(awaitAt).toBeGreaterThan(0);
-    expect(answeringAt).toBeGreaterThan(awaitAt);
+    expect(modal).not.toMatch(/sealAttemptSupport|this\.priorAttemptState/);
   });
 
-  it('a freeform topic mints a fresh id every time, so it has no earlier state to read', () => {
-    const resolve = modal.slice(
-      modal.indexOf('private async resolveTopicPrompt('),
-      modal.indexOf('private async submitAnswer(') > 0
-        ? modal.indexOf('private async submitAnswer(')
-        : undefined,
-    );
-    expect(resolve).toMatch(/this\.priorAttemptState = NO_PRIOR_ATTEMPT;/);
-    expect(resolve).not.toMatch(/readLoggedAttemptState/);
-  });
-
-  it('seals every attempt with the prior state at submit, before grading is requested', () => {
+  it('notes the exposure for the session once, at submit, before the marker write and the passages', () => {
     const submit = modal.slice(
       modal.indexOf('private async submitAnswer('),
-      modal.indexOf('private acceptGrading('),
+      modal.indexOf('private async recordFeedbackShownBeforeDisplay('),
     );
     expect(submit).toMatch(
-      /const support = sealAttemptSupport\(\s*this\.attemptSequence,\s*EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,\s*this\.priorAttemptState,?\s*\);[\s\S]*?runGradingAttempt\(/,
+      /this\.feedbackExposureLedger\.noteShown\(prompt\.originInstrumentId, attemptId\);\s*await this\.recordFeedbackShownBeforeDisplay\(prompt\.originInstrumentId, attemptId\);/,
     );
+    expect(modal.match(/noteShown\(/g)).toHaveLength(1);
   });
 
-  it('notes a graded result for the session when it is shown, and only a graded one', () => {
-    const submit = modal.slice(
-      modal.indexOf('private async submitAnswer('),
-      modal.indexOf('private acceptGrading('),
-    );
-    // `[D-460]` (ol-egov.141.89.6.86) added a closed-view guard before the note and the marker
-    // write after it, inside the same graded-only branch; behaviour is pinned in
-    // `modal-feedback-shown-marker.spec.ts`.
-    expect(submit).toMatch(
-      /if \(pending\.grading\.outcome === 'graded'\) \{\s*if \(this\.closed\) return;\s*this\.feedbackExposureLedger\.noteShown\(prompt\.originInstrumentId, attemptId\);/,
-    );
-    expect(submit.match(/noteShown\(/g)).toHaveLength(1);
-  });
-
-  it('clears the note only when an attempt is accepted, never on a stale or failed accept', () => {
-    const accept = modal.slice(
-      modal.indexOf('private async computeAcceptGrading('),
-      modal.indexOf('private discardGrading('),
-    );
-    expect(accept).toMatch(
-      /result !== null && result\.status === 'accepted'\) \{\s*this\.feedbackExposureLedger\.settle\(prompt\.originInstrumentId\);/,
-    );
+  it('settles nothing: no attempt is accepted in v0.9', () => {
+    expect(modal).not.toMatch(/feedbackExposureLedger\.settle\(/);
   });
 
   it('uses the shared session note unless a caller injects one, and the reader stays optional', () => {

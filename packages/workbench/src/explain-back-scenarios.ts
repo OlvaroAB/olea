@@ -60,22 +60,21 @@ export const EXPLAIN_BACK_STATES: readonly ExplainBackWorkbenchState[] = [
   },
   {
     id: 'explain-back-graded-feedback',
-    label: 'Graded, with feedback, missed points and cited issues',
+    label: 'Practice view, seeded from a confusion-routing prompt',
     group: 'explain-back',
     note:
-      'A confusion-routing seed (F2.12) whose canned `grade` resolves to a partial verdict ' +
-      'carrying missed points, cited issues and a misconception candidate — exercises "From ' +
-      'your notes", "Worth a closer look" and the `[D-171]` "See in registry" one-step ' +
-      'affordance (F8.4), wired to the real `openRegistryEntryFor`.',
+      'A confusion-routing seed (F2.12). After an answer the practice view (`[D-603]`) shows her ' +
+      'explanation, "From your notes" with the passages, the reflection prompts, and "Done" / ' +
+      '"Try again"; no verdict, no findings and no "See in registry". The state id keeps its ' +
+      'earlier name so existing links stay valid.',
   },
   {
     id: 'explain-back-graded-clean',
-    label: 'Graded correct, nothing flagged',
+    label: 'Practice view, a plain prompt',
     group: 'explain-back',
     note:
-      'The one shape `explainBackFullDepthEncouragement` (F6.8/V5) can honestly praise: ' +
-      'verdict correct, nothing missed, cited or flagged. Accepting this grading is the only ' +
-      'path in this surface that shows the encouragement line.',
+      'The same practice view from a plain seed: "Done" closes it and says nothing about how ' +
+      'she did (`[D-603]`). The state id keeps its earlier name so existing links stay valid.',
   },
   {
     id: 'explain-back-refused-check-failed',

@@ -5,7 +5,7 @@
  * convention of sweeping a TEMPLATED function's output across representative
  * fixtures, since `allGroveStrings()` alone cannot enumerate one.
  */
-import type { GroveCourseSummary, VaultPath } from 'olea-core';
+import { type GroveCourseSummary, MASTERY_DISPLAY, type VaultPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   allGroveStrings,
@@ -183,6 +183,15 @@ describe('grove copy — vocabulary registry §6 discipline', () => {
     expect(groveStateLabel('sapling')).toBe('sapling');
     expect(groveStateLabel('tree')).toBe('tree');
     expect(groveStateLabel('ground')).toBe('ground');
+  });
+
+  it('the legend names the stages by label and carries no meaning of its own, so tree has no second phrasing (F2.11, [D-612])', () => {
+    const grove = allGroveStrings().join('\n');
+    for (const s of ['seed', 'sprout', 'sapling', 'tree'] as const) {
+      expect(grove).toContain(MASTERY_DISPLAY[s].label);
+      expect(grove).not.toContain(MASTERY_DISPLAY[s].meaning);
+    }
+    expect(grove).not.toContain('not only recognised');
   });
 });
 

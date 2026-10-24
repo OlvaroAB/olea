@@ -1,4 +1,7 @@
 /**
+ * **v0.9 (`[D-603]`, `ol-egov.141.89.6.129`):** the accept-time recheck below is dormant with the
+ * rest of grading; the last block now pins what the freeze protected, as the practice view has it.
+ *
  * `ol-egov.141.89.6.16`: the accept-time staleness recheck must re-retrieve
  * with the EXACT query the original prompt was built from — never a second,
  * independently rebuilt query string. Before this bead's fix,
@@ -76,48 +79,35 @@ describe('ol-egov.141.89.6.16: the cloze retrieval query and the prompt question
   });
 });
 
-describe('ol-egov.141.89.6.16: the accept-time recheck reuses the frozen build-time query, never a second, rebuilt one', () => {
-  it('ResolvedPrompt carries a query field', () => {
-    expect(modal).toMatch(/interface ResolvedPrompt \{[\s\S]{0,900}?readonly query: string;/);
-  });
-
-  it('resolveInstrumentPrompt freezes the exact string it retrieved with onto the prompt', () => {
+/**
+ * `[D-603]` (`ol-egov.141.89.6.129`): in v0.9 there is no accept, so no accept-time recheck and no
+ * second query to diverge from the first. What the freeze protected now holds by construction:
+ * the retrieval runs once, with the exact query `questionQuery` (or the topic) gives, when the
+ * question is resolved, and the passages she reads after answering are those blocks, never a
+ * fresh search with a rebuilt string.
+ */
+describe('v0.9: the one retrieval is made when the question is resolved, with the frozen query, and never again', () => {
+  it('resolveInstrumentPrompt retrieves with questionQuery(instrument), never with the question text she reads', () => {
     const body = bodyBetween(
       'private async resolveInstrumentPrompt(',
       'private async resolveTopicPrompt(',
     );
     expect(body).toMatch(/const query = questionQuery\(instrument\);/);
     expect(body).toMatch(/const sourceBlocks = await this\.deps\.retrieveSourceBlocks\(query\);/);
-    // The fix: `query` must be threaded onto the constructed ResolvedPrompt,
-    // not silently dropped in favour of re-deriving it from
-    // `context.question` at accept time. Not required to be the LAST field
-    // (`ol-egov.141.89.6.50` appended `sourceMaterial`/`relationExpected`
-    // after it).
-    expect(body).toMatch(/const prompt: ResolvedPrompt = \{[\s\S]{0,200}?\n\s*query,\n/);
+    expect(body).not.toMatch(/retrieveSourceBlocks\([^)]*question/);
   });
 
-  it('resolveTopicPrompt freezes the exact topic string it retrieved with onto BOTH prompts it constructs (the insufficient-notes refusal and the answering phase)', () => {
-    const body = bodyBetween('private async resolveTopicPrompt(', 'private async submitAnswer(');
+  it('resolveTopicPrompt retrieves with the bare topic, never the "In your own words" question built from it', () => {
+    const body = bodyBetween('private async resolveTopicPrompt(', 'private enterNewQuestion(');
     expect(body).toMatch(/const sourceBlocks = await this\.deps\.retrieveSourceBlocks\(topic\);/);
-    // Widened from 200 to 400 chars when `ol-egov.141.89.6.50` appended
-    // `sourceMaterial`/`relationExpected` onto both constructed prompts, and to 500 when
-    // `ol-egov.141.89.6.75` appended `neighbourConceptId` beside them.
-    const promptConstructions =
-      body.match(/const prompt: ResolvedPrompt = \{[\s\S]{0,500}?\n\s*\};/g) ?? [];
-    expect(promptConstructions).toHaveLength(2);
-    for (const construction of promptConstructions) {
-      expect(construction).toMatch(/query: topic,/);
-    }
   });
 
-  it('computeAcceptGrading passes the frozen prompt.query to buildObservationContext, never prompt.context.question', () => {
-    const body = bodyBetween('private async computeAcceptGrading(', 'private discardGrading(');
-    const observationCallStart = body.indexOf('await this.deps.buildObservationContext({');
-    expect(observationCallStart).toBeGreaterThanOrEqual(0);
-    const observationCallEnd = body.indexOf('})),', observationCallStart);
-    expect(observationCallEnd).toBeGreaterThan(observationCallStart);
-    const observationCall = body.slice(observationCallStart, observationCallEnd);
-    expect(observationCall).toMatch(/query: prompt\.query,/);
-    expect(observationCall).not.toMatch(/prompt\.context\.question/);
+  it('nothing after submit retrieves: the only retrieval calls are in the two resolvers and the lookup they share', () => {
+    const calls = modal.match(/retrieveSourceBlocks\(/g) ?? [];
+    // resolveInstrumentPrompt, resolveTopicPrompt, and resolveGradingSourceBlocks's neighbour lookup.
+    expect(calls).toHaveLength(3);
+    const afterSubmit = modal.slice(modal.indexOf('private async submitAnswer('));
+    expect(afterSubmit).not.toMatch(/retrieveSourceBlocks\(/);
+    expect(modal).not.toMatch(/buildObservationContext\(/);
   });
 });

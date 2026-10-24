@@ -4,6 +4,11 @@
  * documents), so this has two halves: the value the modal passes is built by the pure
  * `buildExplainBackGradingProvenance` (behavioural), and the modal's accept path actually passes
  * it into `recordSoloGradeAndReview` (source-level, comments stripped).
+ *
+ * **v0.9 (`[D-603]`, `ol-egov.141.89.6.129`):** no request is built and no review is written, so
+ * the view supplies no grading provenance; the builder stays, tested below, for when grading
+ * returns. What the practice explanation carries of the passages is their digests, in the same
+ * digest space (`digestPassage`), and never their text (D7.1, `[D-614]`).
  */
 
 import { readFileSync } from 'node:fs';
@@ -11,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { explainBackGradingProvenance } from 'olea-contracts';
 import { digestPassage, EXPLAIN_BACK_JUDGE_CONTRACT_VERSION } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { practiceExplanationInput } from '../../src/explain-back/practice-record.js';
 import { buildExplainBackGradingProvenance } from '../../src/explain-back/request.js';
 
 const srcDir = fileURLToPath(new URL('../../src/', import.meta.url));
@@ -49,13 +55,33 @@ describe('the grading provenance the modal supplies', () => {
   });
 });
 
-describe('ExplainBackModal passes that provenance into the review write', () => {
-  it('builds it from prompt.context and sends it on the recordSoloGradeAndReview call', () => {
-    expect(modal).toMatch(
-      /const gradingProvenance = await buildExplainBackGradingProvenance\(prompt\.context\);/,
-    );
-    expect(modal).toMatch(
-      /await this\.deps\.recordSoloGradeAndReview\(\{[\s\S]*?\bgradingProvenance,[\s\S]*?\}\);/,
-    );
+describe('v0.9: the view builds no grading provenance, and names passages only by digest', () => {
+  it('no request is built, so no provenance is built or sent', () => {
+    expect(modal).not.toMatch(/buildExplainBackGradingProvenance|gradingProvenance,/);
+  });
+
+  it('the practice explanation’s passages are digested with the same digestPassage, and their text goes nowhere', async () => {
+    const input = await practiceExplanationInput({
+      instrumentId: 'q-1',
+      attemptId: 'attempt-2',
+      conceptIds: ['concept-1'],
+      promptShape: 'concept',
+      durationMs: 1000,
+      answer: 'an answer',
+      leftAt: new Date('2026-10-20T14:00:00Z'),
+      earlierAttemptIds: ['attempt-1'],
+      passageTexts: blocks.map((block) => block.text),
+    });
+    expect(input.passagesShownInView).toEqual([
+      {
+        attemptId: 'attempt-1',
+        passageFingerprints: [
+          await digestPassage(blocks[0]?.text ?? ''),
+          await digestPassage(blocks[1]?.text ?? ''),
+        ],
+      },
+    ]);
+    const serialised = JSON.stringify(input.passagesShownInView);
+    for (const block of blocks) expect(serialised).not.toContain(block.text);
   });
 });

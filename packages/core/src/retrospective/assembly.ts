@@ -19,6 +19,11 @@
  * exclusions `buildRetrospective` uses for its own displayed stage; nothing here restates the stage
  * rule, so a ruled change to it moves this too.
  *
+ * **Practice counts as practised, never as demonstrated** (D7.1, `[D-614]`). A genuine practice
+ * explanation of a concept before the date is study of it, so `attempted` is true for it, exactly
+ * as for a scored review; it is not evidence, so `demonstrated` (and with it {k}) never reads it —
+ * the stage fold reads reviews only. A flagged answer and a non-attempt count in neither.
+ *
  * **Drawn once, by clause (`[D-469]`, F8.8 "What she had practised by the date").**
  * `summariseBeforeAssessment` turns the per-concept assembly into the one line's counts: {n}
  * practised, {m} in scope, {k} explained. Both counts read the same filtered log, one boundary.
@@ -33,6 +38,10 @@
 
 import type { MasteryState, ReviewLogEntry } from 'olea-contracts';
 import { foldConceptStage, type MasteryRollupOptions } from '../mastery/rollup.js';
+import {
+  isGenuinePracticeExplanation,
+  studiedConceptOf,
+} from '../review-log/practice-explanation.js';
 import { type CalendarDay, calendarDayOfTimestamp } from '../today/calendar-day.js';
 import type {
   RetrospectiveAssemblyEntry,
@@ -52,13 +61,22 @@ export function assembleBeforeAssessment(input: {
     const day = calendarDayOfTimestamp(entry.timestamp);
     return day !== null && day < input.assessmentDate;
   });
+  const practisedByExplanation = new Set<string>();
+  for (const entry of before) {
+    if (!isGenuinePracticeExplanation(entry)) continue;
+    const conceptId = studiedConceptOf(entry);
+    if (conceptId !== undefined) practisedByExplanation.add(conceptId);
+  }
   return input.scope.map(({ conceptId, conceptName }) => {
     const { state, evidence } = foldConceptStage(before, conceptId, input.stageOptions, {});
     const demonstrated: MasteryState = state;
     return {
       conceptId,
       conceptName,
-      attempted: evidence.scoredEventCount > 0 || evidence.explainBackAttempts > 0,
+      attempted:
+        evidence.scoredEventCount > 0 ||
+        evidence.explainBackAttempts > 0 ||
+        practisedByExplanation.has(conceptId),
       demonstrated,
     };
   });

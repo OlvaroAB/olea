@@ -1,12 +1,15 @@
 /**
  * `@auto-web` — F5.1's "Explain it back" surface (`olea-service/features/
  * F5-explain-it-back.md`, `ol-z6x2` [WB-2] F5 tranche, `[D-163]`), driven in
- * a real browser against the REAL `ExplainBackModal` from `packages/plugin`,
- * fed CANNED `grade`/`acceptWithObservation` results
- * (`explain-back-scenarios.ts`'s module doc explains why: this surface's own
- * risk is the modal's phase-rendering state machine and its copy, never the
- * grading pipeline itself — that is already covered by `packages/core`'s and
- * `olea-service`'s own spec files).
+ * a real browser against the REAL `ExplainBackModal` from `packages/plugin`.
+ *
+ * **In v0.9 the view is ungraded practice** (`[D-603]`, words `[D-611]`;
+ * `ol-egov.141.89.6.129`): after an answer it shows her explanation, the
+ * passages the prompt carries under "From your notes", the reflection prompts
+ * and "Done" / "Try again", and nothing that grades. The fixture states
+ * (`explain-back-scenarios.ts`, outside this bead's files) still carry canned
+ * `grade`/`acceptWithObservation` results under their graded-era names; the
+ * practice view never calls them, which is part of what these tests prove.
  *
  * `ExplainBackModal` is a `Modal`, not an `ItemView` — it renders as an
  * app-wide overlay into `[data-wb-modal-host]`, a sibling of the host
@@ -14,20 +17,33 @@
  * locator below queries the TOP document directly, never `frame(page)`.
  *
  * Reachability: proves the SCREEN and its phase transitions against the real
- * class, not `packages/plugin/src/main.ts`'s own production
- * `gradeExplainBackAttempt`/`acceptExplainBackGradingWithObservation` wiring
- * — same posture `registry.spec.ts`'s own doc states for its surface.
+ * class, not `packages/plugin/src/main.ts`'s own production wiring — same
+ * posture `registry.spec.ts`'s own doc states for its surface.
  *
- * Scenarios asserted (F5.1, `[D-163]`, `[D-171]`, F6.8/V5, C4.7/`[D-089]`):
+ * Scenarios asserted (F5.1, F5.2, F5.3, F5.4, `[D-603]`, `[D-611]`):
  *   - a fresh, free-form prompt moves from the topic phase to the answering phase
- *   - a graded answer renders missed points and cited issues as the feedback, and no free-text
- *     paragraph (`ol-egov.141.89.6.98`, David 2026-10-20)
- *   - the `[D-171]` "See in registry" affordance appears with cited issues and hands off for real
- *   - declining ("Try again") returns to answering with her typed answer intact
- *   - accepting a clean grading shows the one honest F6.8 encouragement line
- *   - a transient check failure shows the error-refusal, never the insufficient-notes wording
+ *   - an answer shows the passages and the reflection prompts, and no findings
+ *   - the `[D-171]` "See in registry" affordance is not on the practice view (no cited findings)
+ *   - "Try again" returns to answering with her typed answer intact
+ *   - "Done" says nothing about how she did
+ *   - submitting shows the passages at once, with no check to wait on or fail
  */
 import { expect, type Page, test } from '@playwright/test';
+
+/** Vocabulary registry §39's words, restated as literals per this suite's convention. */
+const SUBMIT = 'Show the passages';
+const NOTICE = 'This is practice: nothing here is graded.';
+const HEADING = 'From your notes';
+const READ_ALONGSIDE = 'Read these alongside what you wrote.';
+const ADD_OR_REPHRASE = 'Is there anything here you would add, or put differently?';
+const DONE = 'Done';
+const TRY_AGAIN = 'Try again';
+
+/** `explain-back-scenarios.ts`'s two fixture passages (coined vocabulary). */
+const PASSAGES = [
+  'The alpha mechanism regulates the synthetic rate constant.',
+  'A higher synthetic rate constant shortens the reaction half-life.',
+];
 
 async function gotoExplainBack(page: Page, stateId: string): Promise<void> {
   await page.goto(`/#/explain-back/${stateId}?set=obsidian-dark&persona=none`);
@@ -37,6 +53,27 @@ async function gotoExplainBack(page: Page, stateId: string): Promise<void> {
 
 function panel(page: Page) {
   return page.locator('.olea-explain-back');
+}
+
+async function answerAndShowPassages(page: Page, answer: string): Promise<void> {
+  await panel(page).locator('.olea-explain-back-answer').fill(answer);
+  await panel(page).getByRole('button', { name: SUBMIT }).click();
+  await expect(
+    panel(page).locator('.olea-explain-back-heading', { hasText: HEADING }),
+  ).toBeVisible();
+}
+
+/** Everything that graded, in any form the graded view ever drew it. */
+async function expectNothingThatGrades(page: Page): Promise<void> {
+  await expect(panel(page).locator('.olea-explain-back-outcome')).toHaveCount(0);
+  await expect(panel(page).locator('.olea-explain-back-encouragement')).toHaveCount(0);
+  await expect(panel(page).locator('.olea-explain-back-feedback')).toHaveCount(0);
+  await expect(panel(page).locator('.olea-explain-back-region')).toHaveCount(0);
+  await expect(panel(page)).not.toContainText("What your notes cover that this didn't");
+  await expect(panel(page)).not.toContainText('Worth a closer look');
+  await expect(panel(page)).not.toContainText('You explained this');
+  await expect(panel(page)).not.toContainText('explained at full depth');
+  await expect(panel(page).getByRole('button', { name: 'Keep this' })).toHaveCount(0);
 }
 
 test('explain-back-fresh-prompt: a free-form prompt moves from the topic phase to the answering phase', async ({
@@ -53,134 +90,99 @@ test('explain-back-fresh-prompt: a free-form prompt moves from the topic phase t
   await expect(panel(page).locator('.olea-explain-back-question')).toHaveText(
     'In your own words: explain the alpha mechanism.',
   );
+  await expect(panel(page).getByText(NOTICE, { exact: true })).toBeVisible();
+  await expect(panel(page).getByRole('button', { name: SUBMIT })).toBeVisible();
 });
 
-test('explain-back-graded-feedback: a graded answer renders feedback, missed points and cited issues', async ({
+test('explain-back-graded-feedback: an answer shows the passages and the reflection prompts, and no findings', async ({
   page,
 }) => {
   await gotoExplainBack(page, 'explain-back-graded-feedback');
 
-  await panel(page)
-    .locator('.olea-explain-back-answer')
-    .fill('The alpha mechanism does something.');
-  await panel(page).getByRole('button', { name: 'Check this' }).click();
+  await answerAndShowPassages(page, 'The alpha mechanism does something.');
 
-  // `[D-217]` (`ol-0r92.48`): the graded phase renders no verdict heading at
-  // all — the old three-verdict wording this test asserted ("Part of this
-  // holds up.") is rejected wording; only the headings below render here now.
-  await expect(panel(page).locator('.olea-explain-back-outcome')).toHaveCount(0);
-  // `[STY-0d]` (`ol-l5og.18.4`): the missed/cited headings moved from the flat
-  // `.olea-explain-back-heading` class into the two edge-differentiated
-  // regions' own `.olea-explain-back-region-head` — only the misconception
-  // heading below kept the old class (`renderGradedPhase` still renders it
-  // directly, not via `renderRegion`).
-  const missedHeading = panel(page).locator('.olea-explain-back-region-head', {
-    hasText: "What your notes cover that this didn't",
-  });
-  await expect(missedHeading).toBeVisible();
-  const citedHeading = panel(page).locator('.olea-explain-back-region-head', {
-    hasText: 'From your notes',
-  });
-  await expect(citedHeading).toBeVisible();
-  const misconceptionHeading = panel(page).locator('.olea-explain-back-heading', {
-    hasText: 'Worth a closer look',
-  });
-  await expect(misconceptionHeading).toBeVisible();
-  // `ol-egov.141.89.6.98` (David, 2026-10-20): the regions above are the
-  // feedback; the grader's free-text paragraph is never shown.
-  await expect(panel(page).locator('.olea-explain-back-feedback')).toHaveCount(0);
+  await expect(panel(page)).toContainText('The alpha mechanism does something.');
+  for (const passage of PASSAGES) {
+    await expect(
+      panel(page).locator('.olea-explain-back-item .olea-explain-back-item-text', {
+        hasText: passage,
+      }),
+    ).toBeVisible();
+  }
+  await expect(panel(page).getByText(READ_ALONGSIDE, { exact: true })).toBeVisible();
+  await expect(panel(page).getByText(ADD_OR_REPHRASE, { exact: true })).toBeVisible();
+  await expect(panel(page).getByText(NOTICE, { exact: true })).toBeVisible();
+  // No answer field for any reflection prompt.
+  await expect(panel(page).locator('textarea, input')).toHaveCount(0);
+  await expect(panel(page).getByRole('button')).toHaveText([DONE, TRY_AGAIN]);
+  await expectNothingThatGrades(page);
+  // The canned grader's own text never appears: nothing was asked of it.
   await expect(panel(page)).not.toContainText('effect on half-life is missing');
 });
 
-test('explain-back-graded-feedback: the D-171 "See in registry" affordance hands off through the real function', async ({
+// `[D-171]`'s affordance rendered only after cited findings. In v0.9 there are none, so it does not
+// render on the practice view; where F8.4b's affordance sits on that view is an open question.
+test('explain-back-graded-feedback: the D-171 "See in registry" affordance is not on the practice view', async ({
   page,
 }) => {
   await gotoExplainBack(page, 'explain-back-graded-feedback');
 
-  await panel(page)
-    .locator('.olea-explain-back-answer')
-    .fill('The alpha mechanism does something.');
-  await panel(page).getByRole('button', { name: 'Check this' }).click();
+  await answerAndShowPassages(page, 'The alpha mechanism does something.');
 
-  const registryButton = panel(page).getByRole('button', { name: 'See in registry' });
-  await expect(registryButton).toBeVisible();
-  await registryButton.click();
-
-  await expect(page.locator('[data-wb-inspector]')).toContainText('Registry hand-off recorded');
+  await expect(panel(page).getByRole('button', { name: 'See in registry' })).toHaveCount(0);
+  await expect(page.locator('[data-wb-inspector]')).not.toContainText('Registry hand-off recorded');
 });
 
-test('explain-back-graded-feedback: declining ("Try again") returns to answering with her typed answer intact', async ({
+test('explain-back-graded-feedback: "Try again" returns to answering with her typed answer intact', async ({
   page,
 }) => {
   await gotoExplainBack(page, 'explain-back-graded-feedback');
 
   const typedAnswer = 'The alpha mechanism does something specific.';
-  await panel(page).locator('.olea-explain-back-answer').fill(typedAnswer);
-  await panel(page).getByRole('button', { name: 'Check this' }).click();
-  // `[D-217]`: the graded phase shows its regions, never an outcome heading
-  // — see the sibling test above.
-  await expect(
-    panel(page).locator('.olea-explain-back-region-head', { hasText: 'From your notes' }),
-  ).toBeVisible();
+  await answerAndShowPassages(page, typedAnswer);
 
-  await panel(page).getByRole('button', { name: 'Try again' }).click();
+  await panel(page).getByRole('button', { name: TRY_AGAIN }).click();
 
   const answerBox = panel(page).locator('.olea-explain-back-answer');
   await expect(answerBox).toBeVisible();
   await expect(answerBox).toHaveValue(typedAnswer);
-  await expect(panel(page).locator('.olea-explain-back-outcome')).toHaveCount(0);
+  await expect(panel(page).locator('.olea-explain-back-heading', { hasText: HEADING })).toHaveCount(
+    0,
+  );
+  await expect(panel(page).getByText(READ_ALONGSIDE, { exact: true })).toHaveCount(0);
 });
 
-test('explain-back-graded-clean: accepting a clean grading shows the one honest F6.8 encouragement line', async ({
-  page,
-}) => {
+test('explain-back-graded-clean: "Done" says nothing about how she did', async ({ page }) => {
   await gotoExplainBack(page, 'explain-back-graded-clean');
 
-  await panel(page).locator('.olea-explain-back-answer').fill('A complete, correct explanation.');
-  await panel(page).getByRole('button', { name: 'Check this' }).click();
+  await answerAndShowPassages(page, 'A complete, correct explanation.');
+  await expectNothingThatGrades(page);
 
-  // `[D-217]`: no verdict heading in the graded phase; and
-  // `ol-egov.141.89.6.98`: no free-text paragraph either, so a clean grading
-  // shows only the decision buttons.
-  await expect(panel(page).getByRole('button', { name: 'Keep this' })).toBeVisible();
-  await expect(panel(page).locator('.olea-explain-back-outcome')).toHaveCount(0);
-  await expect(panel(page).locator('.olea-explain-back-feedback')).toHaveCount(0);
-  await expect(panel(page)).not.toContainText('This names the mechanism');
-  // Clean: none of the three headings, and no D-171 registry action.
-  await expect(panel(page).locator('.olea-explain-back-heading')).toHaveCount(0);
-  await expect(panel(page).getByRole('button', { name: 'See in registry' })).toHaveCount(0);
+  await panel(page).getByRole('button', { name: DONE }).click();
 
-  await panel(page).getByRole('button', { name: 'Keep this' }).click();
-
-  await expect(panel(page).locator('.olea-explain-back-encouragement')).toContainText(
-    "That's the first time this concept has been explained at full depth.",
-  );
-  // The milestone is the whole sentence: the grader's free text is not appended.
-  await expect(panel(page).locator('.olea-explain-back-encouragement')).not.toContainText(
-    'This names the mechanism',
-  );
-  await expect(panel(page).getByRole('button', { name: 'Done' })).toBeVisible();
-  // The workbench fixture's deps never wire `recordSoloGradeAndReview`
-  // (`explain-back-scenarios.ts`), so no SOLO depth comes back and the
-  // accepted phase renders no outcome heading either — `renderAcceptedPhase`
-  // only prints one when a level is actually returned.
-  await expect(panel(page).locator('.olea-explain-back-outcome')).toHaveCount(0);
+  // "Done" closes the view: no depth heading, no milestone line and no other line about how she
+  // did ever appeared, and there was no "Keep this" to choose.
+  await expect(panel(page)).toHaveCount(0);
+  await expect(page.locator('body')).not.toContainText('explained at full depth');
+  await expect(page.locator('body')).not.toContainText('You explained this');
 });
 
-test('explain-back-refused-check-failed: a transient check failure shows the error-refusal, never the insufficient-notes wording', async ({
+test('explain-back-refused-check-failed: submitting shows the passages at once, with no check to wait on or fail', async ({
   page,
 }) => {
   await gotoExplainBack(page, 'explain-back-refused-check-failed');
 
-  await panel(page).locator('.olea-explain-back-answer').fill('An answer to check.');
-  await panel(page).getByRole('button', { name: 'Check this' }).click();
+  await panel(page)
+    .locator('.olea-explain-back-answer')
+    .fill('An answer to read against the notes.');
+  await panel(page).getByRole('button', { name: SUBMIT }).click();
 
-  // Exact text match is itself proof this is the transient refusal and not
-  // `explainBackInsufficientNotesRefusal`'s "Your notes have…/Add more to
-  // your notes" diagnostic (C4.7/`[D-089]`'s two-reason posture).
-  const refusal = panel(page).locator('.olea-explain-back-refusal');
-  await expect(refusal).toHaveText(
-    "Olea couldn't check this explanation against your notes just now, so nothing was graded. Try again in a moment.",
-  );
-  await expect(panel(page).getByRole('button', { name: 'Check this' })).toBeVisible();
+  // The fixture's grader would fail; it is never asked, so the passages simply appear.
+  await expect(
+    panel(page).locator('.olea-explain-back-heading', { hasText: HEADING }),
+  ).toBeVisible();
+  await expect(panel(page).locator('.olea-explain-back-loading')).toHaveCount(0);
+  await expect(panel(page)).not.toContainText('Checking against your notes');
+  await expect(panel(page).locator('.olea-explain-back-refusal')).toHaveCount(0);
+  await expect(panel(page).getByRole('button', { name: 'Check this' })).toHaveCount(0);
 });

@@ -34,8 +34,8 @@
  * - **F8.4b (`[D-175]`) adds the per-instrument explain-back history line**
  *   (`explainBackHistoryRowLine` and its helpers below) — genuinely NEW
  *   copy, permitted because F8.4b's own ratified clause defines this
- *   surface. No scoreboard: one attempt, one date, one depth phrase, never
- *   a total or a streak.
+ *   surface. No scoreboard: one row, one date, no depth phrase (`[D-603]`),
+ *   never a total or a streak.
  *
  * **INV-1.** No `obsidian` import here — unit-tested under Vitest.
  */
@@ -124,6 +124,10 @@ export function explainBackLine(summary: RegistryConceptEntry['explainBack']): s
 }
 
 /**
+ * **No history row or concept line calls this any more** (`[D-603]`: no depth reading on any row).
+ * It stays exported only because `test/registry/copy.spec.ts` uses it to assert that no row or
+ * concept line carries any depth phrase; nothing in the view imports it in v0.9.
+ *
  * F8.4b's SOLO-depth reading, in the reporting voice (GLOSSARY SOLO rule 5:
  * the raw level name and a number are both forbidden to her; rule 1: grade
  * the response, never label the student — "this explanation connects two
@@ -173,15 +177,17 @@ export const EXPLAIN_BACK_HISTORY_CONTESTED_MARKER = 'under re-review';
 export const EXPLAIN_BACK_HISTORY_HEADING = 'Explain-back history';
 
 /**
- * F8.4b's one history row: "Explained [depth phrase] on [date]", with the
- * `[D-095]` contested marker appended when this row is the instrument's
- * current graded attempt and it is presently quarantined. Never the raw
- * `soloLevel` name, never a number, and never the student's answer text or
- * the grader's feedback — those stay behind `[D-077]`'s content store,
- * which this surface never resolves.
+ * F8.4b's one history row (registry section 10.5 as applied): the date alone,
+ * with the `[D-095]` contested marker appended when this row is the
+ * instrument's current graded attempt and it is presently quarantined. **No
+ * depth phrase, never a raw level name, a number, a total or a streak**
+ * (`[D-603]`), and never the student's answer text or the grader's feedback —
+ * those stay behind `[D-077]`'s content store, which this line never resolves.
+ * The same line serves a practice explanation (`[D-614]`), which is never
+ * contested.
  */
 export function explainBackHistoryRowLine(row: ExplainBackHistoryRow): string {
-  const line = `Explained ${explainBackDepthPhrase(row.soloLevel)} on ${historyDateLabel(row.timestamp)}.`;
+  const line = historyDateLabel(row.timestamp);
   return row.contested ? `${line} (${EXPLAIN_BACK_HISTORY_CONTESTED_MARKER})` : line;
 }
 

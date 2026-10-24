@@ -8,61 +8,38 @@
  * input method on this SAME view, not built here.
  *
  * ===========================================================================
- * WHAT THIS VIEW DOES AND DOES NOT DO (scope, disclosed per DF-20)
+ * IN v0.9 THIS VIEW IS UNGRADED PRACTICE (`[D-603]`, words `[D-611]`)
  * ===========================================================================
- * Wires the two ports `ol-12gs` names as "the waiting pipeline this finally
- * makes reachable": `gradeExplainBackAttempt` and
- * `acceptExplainBackGradingWithObservation` (`../grading/wiring.ts`).
+ * `ol-egov.141.89.6.129`. She writes her explanation with nothing open beside
+ * her. When she chooses "Show the passages" the view shows her explanation
+ * and, under "From your notes", the supporting passages the prompt already
+ * carries (F5.2a's lookup for a concept or a relation prompt, done when the
+ * question was resolved, never a fresh search), then the fixed reflection
+ * prompts for the prompt's shape, with no answer field, and the end controls
+ * "Done" and "Try again" (F5.2, F5.4, vocabulary registry §39).
  *
- * `ol-cqz8` UPDATE: `acceptGrading` below now ALSO runs the SOLO depth
- * pipeline and appends the subject's own review-log event, via
- * `deps.recordSoloGradeAndReview` — see `./solo-review.ts`'s module doc for
- * the full chain (`gradeSoloAttempt` → `acceptSoloGrading` →
- * `recordGradedExplainBackReview`) and for why this settles as ONE review
- * event, not two. That dep is optional and best-effort (mirrors
- * `acceptWithObservation`'s own failure-isolation posture): `originReview
- * EventId` stays `null` below for the unrelated reason it already was
- * (nothing here reads a PRIOR review event's id — `recordSoloGradeAndReview`
- * writes a fresh one).
+ * **Nothing is sent anywhere after she submits.** No correctness judge, no
+ * depth pass, no misconception resolution: this view no longer calls the
+ * dependencies that reach them (`grade`, `acceptWithObservation`,
+ * `buildObservationContext`, `recordSoloGradeAndReview`,
+ * `loadMisconceptionDigest`), which stay on {@link ExplainBackModalDeps} only
+ * so the composition root and the workbench keep compiling while grading is
+ * dormant. That code (the judge and grading pipeline, `./solo-review.ts`'s
+ * depth pass, `../grading/wiring.ts`'s observation routing) stays in the
+ * codebase with its own tests; it returns only as the F5 heading note says.
+ * Nothing on the view says whether, or how far, her explanation matches the
+ * passages: no depth heading, no omission, error or confusion region, no
+ * misconception region, no follow-up question and no first-full-depth
+ * sentence, on any path (F5.3 as amended).
  *
- * `ol-0r92.48` UPDATE (`[D-217]`): the graded phase's old three-verdict
- * heading is gone — `renderGradedPhase` below never renders a heading at
- * all, because the SOLO depth level `[D-217]` requires it to read is not
- * known yet at that point in the exchange (it grades later, inside
- * `acceptGrading`, per the paragraph above). `deps.recordSoloGradeAndReview`
- * now optionally returns the `SoloLevel` it graded — `void`/`undefined` when
- * nothing was written (no concept id, the Worker unconfigured, a caught
- * failure) — and `renderAcceptedPhase` renders `explainBackDepthHeading`
- * when one comes back, never a placeholder when it does not. The return
- * type is widened rather than changed (`SoloLevel | void`) so `main.ts`'s
- * wrapper (outside this bead's `owns`) keeps satisfying the interface. That
- * wrapper now DOES forward the level (`ol-38kp`/`ol-iti2`, `[D-217]`):
- * `solo-review.ts`'s own `recordSoloGradeAndReview` resolves a
- * `RecordSoloGradeAndReviewOutcome` (`{ result, soloLevel }`), and `main.ts`'s
- * `recordExplainBackSoloGradeAndReview` returns `outcome?.soloLevel` from it.
- * This view's own `acceptGrading` below already relies on that forwarding:
- * it awaits `this.deps.recordSoloGradeAndReview` and assigns the returned
- * `depthOutcome` to `soloLevel` (`if (depthOutcome) soloLevel = depthOutcome;`)
- * — there is no remaining gap between the underlying grade and what
- * `renderAcceptedPhase` renders.
- *
- * `ol-yj0k` UPDATE: `durationMs` on that same review-log write is now real,
- * not a hardcoded `null` — this view is the only place that can observe
- * both endpoints of "presentation to answer" for explain-back (they are UI
- * state transitions, not anything `solo-review.ts` resolves), so it times
- * itself (`presentedAtMs`/`now`, both above `render()`) and passes the
- * result through `acceptGrading` into `recordSoloGradeAndReview`. See
- * `submitAnswer`'s own doc for exactly which two moments are measured.
- *
- * It does NOT:
- * - Choose the relation-context neighbour itself: F5.2a's neighbour-concept
- *   retrieval is wired (`resolveGradingSourceBlocks` below), but which
- *   neighbour a prompt names is decided upstream of this view, by
- *   `./request.ts`'s `resolveExplainBackCausesPartner`.
- * - Fold an accepted attempt into F4.6's session time accounting
- *   (`study-session/explain-back.ts`'s own "Reachability" section already
- *   names this as separate, unstarted work: recognising a live acceptance
- *   and durably attributing it to "this session").
+ * **What it writes.** The `[D-460]` exposure marker, before the passages
+ * appear (F5.4); and, when she leaves an answer by "Done" or "Try again",
+ * one practice explanation (D7.1, `[D-614]`) through
+ * `deps.recordPracticeExplanation` (`./practice-record.ts`, over
+ * `olea-core`'s `recordPracticeExplanation`). No review event, no grade, no
+ * correctness verdict, no misconception observation and no scheduling
+ * observation. A skip, or a prompt closed without an answer, is the
+ * non-attempt it always was (F5.7) and shows nothing.
  *
  * ===========================================================================
  * HAND-OFF + RESUME, NEVER A SECOND INLINE COPY
@@ -81,16 +58,15 @@ import type { App } from 'obsidian';
 import { Modal } from 'obsidian';
 import type {
   ExplainBackGradingProvenance,
+  ExplainBackPromptShape,
   MasteryState,
   SoloLevel,
   SupportLevel,
 } from 'olea-contracts';
 import {
   buildGradingSourceMaterial,
-  type CitedIssue,
   type ConceptDefiningPassages,
   type ConceptRelation,
-  discardExplainBackGrading,
   type ExplainBackFeedbackShownLogRecordInput,
   type ExplainBackPromptContext,
   type ExplainBackSetAsideLogRecordInput,
@@ -98,7 +74,6 @@ import {
   type GradeExplainBackInput,
   type GradingRelationContext,
   type GradingSourceMaterial,
-  type GroundedGrading,
   type PendingExplainBackGrading,
   type Provenance,
   type ResolvedRelationEdge,
@@ -108,94 +83,42 @@ import type {
   AcceptExplainBackGradingWithObservationContext,
   AcceptExplainBackGradingWithObservationResult,
 } from '../grading/wiring.js';
-import { openRegistryEntryFor } from '../registry/obsidian-ports.js';
-import {
-  EXPLAIN_BACK_CHECK_FAILED_REFUSAL,
-  EXPLAIN_WHY_UNAVAILABLE,
-  explainBackFullDepthEncouragement,
-  explainBackInsufficientNotesRefusal,
-} from '../review/copy.js';
+import { explainBackInsufficientNotesRefusal } from '../review/copy.js';
 import type { ReviewInstrument } from '../review/types.js';
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
-  appendSetAsideAttempt,
-  EMPTY_ATTEMPT_SEQUENCE,
-  type ExplainBackAttemptSequence,
-  type SealedAttemptSupport,
-  sealAttemptSupport,
-} from './attempt-sequence.js';
-import {
-  EXPLAIN_BACK_ACCEPT_LABEL,
   EXPLAIN_BACK_ANSWER_PLACEHOLDER,
-  EXPLAIN_BACK_CITED_HEADING,
-  EXPLAIN_BACK_COULD_NOT_CHECK_EYEBROW,
   EXPLAIN_BACK_DISCARD_LABEL,
+  EXPLAIN_BACK_DONE_LABEL,
   EXPLAIN_BACK_FOUND_LIST_CAPTION,
-  EXPLAIN_BACK_GRADING_LABEL,
-  EXPLAIN_BACK_MISCONCEPTION_HEADING,
-  EXPLAIN_BACK_MISSED_HEADING,
   EXPLAIN_BACK_MODAL_TITLE,
   EXPLAIN_BACK_NOTHING_MATCHED_EYEBROW,
-  EXPLAIN_BACK_PRACTICE_ONLY_NOTICE,
+  EXPLAIN_BACK_PASSAGES_HEADING,
+  EXPLAIN_BACK_PRACTICE_NOTICE,
   EXPLAIN_BACK_QUESTION_LABEL,
-  EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
   EXPLAIN_BACK_SUBMIT_LABEL,
   EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
   EXPLAIN_BACK_TOPIC_PROMPT,
-  explainBackDepthHeading,
+  type ExplainBackReflectionShape,
+  explainBackReflectionPrompts,
 } from './copy.js';
-import { declineKindOf, declineMessageFor } from './decline-kind.js';
 import {
   type FeedbackExposureLedger,
   feedbackShownRecordInput,
-  NO_PRIOR_ATTEMPT,
-  type PriorAttemptState,
   type ReadLoggedAttemptState,
   type RecordFeedbackShown,
-  resolvePriorAttemptState,
   sessionFeedbackExposureLedger,
   writeFeedbackShown,
 } from './feedback-exposure.js';
-import { isConfirmedFirstFullDepth } from './first-full-depth.js';
-import { runGradingAttempt } from './grading-attempt.js';
+import { practiceExplanationInput, type RecordViewPracticeExplanation } from './practice-record.js';
 import {
-  buildExplainBackGradingProvenance,
   buildExplainBackPromptContextFromInstrument,
   buildExplainBackPromptContextFromTopic,
-  buildGradeExplainBackInputFromTypedAnswer,
   type ExplainBackRelationPartner,
   type ExplainBackSourceBlock,
   type FreeformTopicConceptMatch,
-  permittedConceptIdsFor,
-  shouldRunExplainBackDepthPass,
 } from './request.js';
-import { setAsideRecordInput } from './set-aside-record.js';
 import { canRecordNonAttempt, EXPLAIN_BACK_SKIP_LABEL } from './skip.js';
-import type { ExplainBackSupportShown } from './solo-review.js';
-
-/**
- * `ol-l7ew` [DOS-C5a] — what this view has on screen while she composes an
- * answer, which `[D-094]`'s ladder reads to say how much help she had, and
- * which `[D-281]` item 3 makes one of the four pieces of evidence the top
- * growth stage requires.
- *
- * Both false, and both are a statement about `renderAnsweringPhase` below,
- * which any reader can check against it in one screen: it renders the
- * question, a textarea and a submit button. No hint is offered, and the
- * cited source appears only AFTER grading (`renderGradedPhase`'s regions,
- * `renderFoundList`'s refusal), never open beside her while she writes.
- *
- * This is not a default standing in for a value nobody resolved — it is the
- * resolved value, recorded where the render method it describes can be read
- * next to it. Adding either affordance means flipping the flag in the same
- * change, and the recorded level follows without anything else moving. The
- * flags are NOT a control she can see or set: nothing renders them, and this
- * bead adds no affordance (that would be David's call, not a lane's).
- */
-const EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN: ExplainBackSupportShown = {
-  hintOffered: false,
-  sourceShownWhileAnswering: false,
-};
 
 /**
  * `ol-0r92.98`: an empty or whitespace-only typed answer, exported so the
@@ -215,30 +138,30 @@ export type ExplainBackSeed =
   | { readonly kind: 'freeform' };
 
 export interface ExplainBackModalDeps {
-  readonly grade: (input: GradeExplainBackInput) => Promise<PendingExplainBackGrading | null>;
-  readonly acceptWithObservation: (
+  /**
+   * **Dormant in v0.9** (`[D-603]`): the correctness judge (`main.ts`'s
+   * `gradeExplainBackAttempt`). The practice view never calls it; it stays
+   * declared, optional, so the composition root's wiring of the graded path
+   * is unchanged until grading returns (F5 heading note).
+   */
+  readonly grade?: (input: GradeExplainBackInput) => Promise<PendingExplainBackGrading | null>;
+  /** **Dormant in v0.9** (`[D-603]`): the accept-and-observe step. Never called by the practice view. */
+  readonly acceptWithObservation?: (
     pending: PendingExplainBackGrading,
     context: AcceptExplainBackGradingWithObservationContext,
   ) => Promise<AcceptExplainBackGradingWithObservationResult | null>;
+  /**
+   * The retrieval behind the passages (F5.2, F5.2a): called when the question
+   * is resolved, never after she submits, so the passages she reads are the
+   * ones the prompt already carries.
+   */
   readonly retrieveSourceBlocks: (query: string) => Promise<readonly ExplainBackSourceBlock[]>;
   /**
    * `[D-322]` (`ol-egov.141.89.6.4`): resolves a freeform topic prompt (command palette or Home,
-   * naming no subject) to one concept at composition time, BEFORE she answers — never left
-   * silently unset the way `resolveTopicPrompt` did before this bead. Delegates entirely to
-   * `./request.ts`'s pure `matchFreeformTopicToConcept`, given the current course code (when
-   * known) and whatever candidate concepts the caller's own local projection holds — this class
-   * never reads a concept registry itself, the same "logic elsewhere, DOM/state glue here" split
-   * `resolveCausesPartner` just below already keeps.
-   *
-   * **No production composer wires this yet — a disclosed follow-up, same posture
-   * `resolveIntroducingPassage` below states for itself.** A real caller needs the registry's own
-   * course-scoped concept list (`packages/core/src/registry/build.ts`'s `RegistryModel`, or
-   * `packages/plugin/src/registry/provider.ts`'s live projection of it), which this
-   * presentation-layer modal neither holds nor should learn to compute. Optional and absent by
-   * default: `resolveTopicPrompt` below reads an absent resolver, or one that returns `undefined`,
-   * as `{ kind: 'no-match' }` — `subjectConceptId` stays `null` exactly as before this bead, and
-   * the prompt is marked practice-only (see `ResolvedPrompt.practiceOnly`'s own doc), never
-   * silently unset with no designation the way it read pre-`[D-322]`.
+   * naming no subject) to one concept at composition time, BEFORE she answers. Delegates entirely
+   * to `./request.ts`'s pure `matchFreeformTopicToConcept`. A unique match names the concept the
+   * practice explanation records; an ambiguous or absent one leaves the prompt with no concept.
+   * Optional: an absent resolver, or one that returns `undefined`, reads as `{ kind: 'no-match' }`.
    */
   readonly matchFreeformTopicConcept?: (topic: string) => FreeformTopicConceptMatch | undefined;
   /**
@@ -251,307 +174,146 @@ export interface ExplainBackModalDeps {
    * concept KEY (`instrument.conceptIds[0]`), never a wording
    * (`ol-egov.141.89.6.74`); the partner comes back naming the OTHER end both
    * ways, key and wording, so this view never has to work out which end of
-   * the edge the subject is. `resolveGradingSourceBlocks` below
-   * is the one caller. Optional and absent by default, same posture as
-   * `getMasteryState`/`recordSoloGradeAndReview`: an omitted dep keeps the
-   * pre-existing concept-only path exactly as it was.
+   * the edge the subject is. `resolveGradingSourceBlocks` below is the one
+   * caller: a resolved partner makes the prompt a relation prompt, whose
+   * passages are F5.2a's for a relation and whose reflection prompts name
+   * both ends (registry §39). Optional and absent by default: an omitted dep
+   * keeps every prompt a concept prompt.
    */
   readonly resolveCausesPartner?: (
     subjectConceptId: string,
   ) => ExplainBackRelationPartner | undefined;
   /**
-   * `ol-egov.141.89.6.36`: the "targeted vault-read port" `resolveGradingSourceBlocks`'s
-   * own doc (below) previously named as missing — turns ONE endpoint of a
-   * live causes edge's own `introducingPassages` (a `Provenance`: a source
-   * path plus a `SourceLocation`, never text) into a citable
-   * `ExplainBackSourceBlock`, the SAME shape and citation-id convention
-   * `deps.retrieveSourceBlocks` already produces
-   * (`explain-back/request.ts`'s `retrieveExplainBackSourceBlocks`:
-   * `${path}#${blockIndex}#${index}`) so the grader can cite it exactly like
-   * any other source block. Resolves `null` — never throws — when the
-   * passage cannot be read as it stood at fold time: the note or block was
-   * deleted, moved past the location the edge recorded, or is otherwise
-   * stale; `resolveGradingSourceBlocks` below reads a `null` result as
-   * "this endpoint contributes nothing," the same silent-degrade posture
-   * every other optional dep on this interface takes. Optional and absent
-   * by default, same posture as `resolveCausesPartner`: an omitted dep
-   * keeps the pre-existing behaviour (the edge's own passages never enter
-   * `sourceBlocks`) exactly as it was before this field existed. `main.ts`
-   * does not wire a real implementation yet — a small, disclosed follow-up
-   * in a file this bead does not own, the same posture `getMasteryState`'s
-   * own doc states for its own not-yet-wired port.
+   * `ol-egov.141.89.6.36`: the targeted vault-read port behind a live causes
+   * edge's own `introducingPassages` (a `Provenance`: a source path plus a
+   * `SourceLocation`, never text), turned into an `ExplainBackSourceBlock`,
+   * the SAME shape and citation-id convention `deps.retrieveSourceBlocks`
+   * already produces. Resolves `null` — never throws — when the passage
+   * cannot be read as it stood at fold time; `resolveGradingSourceBlocks`
+   * below reads a `null` result as "this endpoint contributes nothing".
+   * Optional and absent by default.
    */
   readonly resolveIntroducingPassage?: (
     provenance: Provenance,
   ) => Promise<ExplainBackSourceBlock | null>;
-  readonly buildObservationContext: (params: {
+  /** **Dormant in v0.9** (`[D-603]`): the accept-time observation context. Never called by the practice view. */
+  readonly buildObservationContext?: (params: {
     readonly subjectConceptId: string | null;
-    /** `[D-482]` item 4: the permitted concept ids the grading request carried; the resolver matches against exactly these. */
     readonly permittedConceptIds?: readonly string[];
     readonly originInstrumentId: string;
     readonly sourceBlocks: readonly ExplainBackSourceBlock[];
-    /**
-     * `ol-gavc`: the same query `sourceBlocks` was originally retrieved
-     * against (`retrieveSourceBlocks`'s own argument at prompt-resolution
-     * time) — a real caller re-retrieves against this at accept time and
-     * compares, to detect a source that changed while grading was
-     * outstanding. `acceptGrading` below passes `prompt.query`, the exact
-     * string frozen on `ResolvedPrompt` at the `retrieveSourceBlocks` call
-     * site that produced `prompt.sourceBlocks` — never `prompt.context
-     * .question`, which is a DIFFERENT string for a cloze instrument
-     * (`questionQuery` joins `before`/`after` with a space;
-     * `questionAndReferenceAnswerForCloze` in `./request.ts` joins them with
-     * a literal `____` blank marker) and, independently, for every
-     * topic-seeded prompt (`resolveTopicPrompt` retrieves against the bare
-     * topic string but `buildExplainBackPromptContextFromTopic` wraps it in
-     * "In your own words: explain …."). Rebuilding the query two ways made
-     * accept-time retrieval read notes that were never part of the graded
-     * prompt, which can misreport a false stale (silently dropping a
-     * correct answer from the record) or miss a real change
-     * (`ol-egov.141.89.6.16`). Freezing the one string used for the real
-     * retrieval, once, closes both divergences for every instrument kind
-     * without re-deriving a query a second way anywhere.
-     */
     readonly query: string;
   }) => Promise<AcceptExplainBackGradingWithObservationContext>;
   /**
-   * `ol-cqz8`: runs the SOLO depth pipeline and appends the subject's own
-   * review-log event — see `./solo-review.ts`'s `recordSoloGradeAndReview`,
-   * which this normally wraps. Optional and best-effort, same posture as
-   * `acceptWithObservation`'s own embedding step: a rejection is caught in
-   * `acceptGrading` below and never fails the correctness accept it rode on.
-   * `undefined` until a caller wires a real `RecordSoloGradeAndReviewDeps`
-   * instance — see this file's module doc and `./solo-review.ts`'s own
-   * "reachability" section for exactly what that needs and where it goes.
-   *
-   * `ol-0r92.48` (`[D-217]`): the return type is now `SoloLevel | void`,
-   * never a required `SoloLevel` — a caller that resolves `void` (today's
-   * `main.ts` wrapper does) still satisfies this type unchanged, so widening
-   * it needed no edit to a file this bead does not own. `acceptGrading`
-   * below reads whatever comes back and passes it straight to
-   * `renderAcceptedPhase`; a `void`/`undefined` result renders no heading at
-   * all (`[D-217]`: never a placeholder), exactly as it did before this
-   * field could report a level.
+   * **Dormant in v0.9** (`[D-603]`): the depth pass and the graded review
+   * write (`./solo-review.ts`'s `recordSoloGradeAndReview`). The practice view
+   * never calls it, so a practice attempt writes no review event, no
+   * `explainBackGrade`, no `explainBackCorrectness` and no scheduling
+   * observation. The params keep the shape the graded path used, so
+   * `main.ts`'s wrapper is unchanged.
    */
   readonly recordSoloGradeAndReview?: (params: {
     readonly instrumentId: string;
-    /** `ol-0r92.94` [DOS-C1]: forwarded to `solo-review.ts`'s `RecordSoloGradeAndReviewParams.attemptId` — see that field's own doc for the fallback a not-yet-updated caller gets when it omits this. */
     readonly attemptId: string;
     readonly subjectConceptId: string | null;
     readonly context: ExplainBackPromptContext;
     readonly answer: string;
-    /** See this file's `now`/`presentedAtMs` doc just below for the definition. */
     readonly durationMs: number | null;
-    /**
-     * `ol-l7ew` [DOS-C5a]: the support level this view actually showed on
-     * this attempt, forwarded to `solo-review.ts`'s
-     * `RecordSoloGradeAndReviewParams.supportLevelShown` and persisted onto
-     * the same review record the depth grade lands on. `undefined` only
-     * where the presentation is genuinely unobservable — `[D-281]` reads
-     * that as unknown and refuses the top growth stage, which is the honest
-     * outcome and never to be papered over with `'independent'`.
-     */
     readonly supportLevelShown?: SupportLevel;
-    /**
-     * `ol-0r92.56` (`[D-228 / SIG-3]`): how this attempt's answer was
-     * composed, forwarded to `solo-review.ts`'s
-     * `RecordSoloGradeAndReviewParams.answerEdits` (a small, disclosed
-     * follow-up in a file this bead does not own — see that field's own doc
-     * for the fallback a not-yet-updated caller gets when it omits this,
-     * the same posture `attemptId`'s doc above states). Always computed for
-     * a genuine submit through this view, the same posture `durationMs`
-     * takes — never `undefined` here, though `firstEditMs` inside it can be
-     * `null` (see `this.firstEditAtMs`'s own doc). Gated to explain-back at
-     * the schema (`contracts/review-log.ts`'s `refineAnswerEditsInstrumentType`);
-     * this view is the only caller that can ever produce one.
-     */
     readonly answerEdits: {
-      /** See `this.firstEditAtMs`'s own doc for exactly what is measured and why it can be `null`. */
       readonly firstEditMs: number | null;
-      /** See `this.editBursts`'s own doc for exactly what is counted. */
       readonly editBursts: number;
     };
-    /**
-     * `ol-egov.141.89.6.50`: `prompt.sourceMaterial` — `resolveGradingSourceBlocks`'s
-     * own `GradingSourceMaterial` for this prompt, forwarded to
-     * `solo-review.ts`'s `RecordSoloGradeAndReviewParams.sourceMaterial`,
-     * which threads it into `buildGradeSoloInputFromTypedAnswer`'s
-     * `resolved.sourceMaterial` (F5.3's omission denominator, never the
-     * flattened, role-blind default). Optional, same structural-typing
-     * accommodation `attemptId`/`durationMs` above take; `undefined` exactly
-     * when `prompt.subjectConceptId` was `null`.
-     */
     readonly sourceMaterial?: GradingSourceMaterial;
-    /**
-     * `ol-egov.141.89.6.50`: `prompt.relationExpected` — always sent, never
-     * conditionally spread (same posture `answerEdits` above takes): this
-     * view always knows the answer from `resolveGradingSourceBlocks`, `false`
-     * when no causes partner resolved or the prompt has no subject concept.
-     */
     readonly relationExpected?: boolean;
-    /**
-     * `ol-egov.141.89.6.75` (F5.3a, C5.11): `prompt.neighbourConceptId` — the causes partner's
-     * concept KEY (the opaque `ConceptRecord.key` of the other end of the edge this prompt was
-     * composed from, never its wording), forwarded to `solo-review.ts`'s
-     * `RecordSoloGradeAndReviewParams.neighbourConceptId`, where it becomes the F5.3a scheduling
-     * observation's only field exactly when the depth judge reports that she used the neighbour
-     * correctly. Decided once, here, when the partner resolved, never read off the model's reply.
-     * Optional, same structural-typing accommodation `sourceMaterial` above takes (`main.ts`'s
-     * wrapper passes the object through unreconstructed); `undefined` exactly when no causes
-     * partner resolved, which is also exactly when `relationExpected` is `false`.
-     */
     readonly neighbourConceptId?: string;
-    /**
-     * `ol-ryrh` (`[D-286]`, `[D-320]`): `'skipped'` when the accepted verdict
-     * means no depth pass runs (`./request.ts`'s
-     * `shouldRunExplainBackDepthPass`), forwarded to `solo-review.ts`'s
-     * `RecordSoloGradeAndReviewParams.depthPass` so the correctness verdict
-     * is still recorded without a depth call. Optional, same structural-typing
-     * accommodation `attemptId` above takes; absent means `'run'`.
-     */
     readonly depthPass?: 'run' | 'skipped';
-    /**
-     * `[D-416]`: the `attemptId` of the attempt she set aside immediately
-     * before writing this answer, forwarded to `solo-review.ts`'s
-     * `RecordSoloGradeAndReviewParams.followsAttemptId` and persisted as the
-     * review's `followsAttemptId`. Absent for a first attempt. Sealed at
-     * `submitAnswer` (`./attempt-sequence.ts`'s `sealAttemptSupport`). The
-     * object reaches `solo-review.ts` unreconstructed through `main.ts`'s
-     * wrapper, so no composition-root change is needed for it to land.
-     */
     readonly followsAttemptId?: string;
-    /**
-     * `[D-483]`: the versions and passage fingerprints of the grading request this view built
-     * (`./request.ts`'s `buildExplainBackGradingProvenance`), forwarded to `solo-review.ts`'s
-     * `RecordSoloGradeAndReviewParams.gradingProvenance`. Digests and version labels only.
-     */
     readonly gradingProvenance?: ExplainBackGradingProvenance;
   }) => Promise<SoloLevel | undefined>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
   /**
    * `ol-0r92.104` [DOS-I9] (`[D-273]`, `[D-306]`): writes one non-attempt
-   * review-log event — core's `appendNonAttemptRecord`
-   * (`olea-core`'s `review-log/write.ts`), wrapped with a vault and the
-   * offer `trigger` this modal instance was opened under. `trigger` is not a
-   * param here because this view has no way to know it: `ExplainBackSeed`
-   * carries no trigger field, and the SAME `openExplainBackModal`
-   * construction point (`main.ts`, outside this bead's `owns`) is the one
-   * call site for all four of `[D-163]`'s ruled entry points. A real
-   * implementation closes over the trigger for the entry point it is
-   * constructed for — see this file's module doc, "Wiring", for what
-   * `main.ts` needs to change to supply that per call site.
+   * review-log event — core's `appendNonAttemptRecord`, wrapped with a vault
+   * and the offer `trigger` this modal instance was opened under (the view
+   * has no way to know it; `main.ts`'s `openExplainBackModal` closes over it).
    *
-   * Optional and best-effort, same posture as `recordSoloGradeAndReview`:
-   * `main.ts` does not wire this yet, so a skip or a close-without-answering
-   * today writes nothing (unchanged from before this bead), never throws,
-   * and never blocks the UI transition it accompanies
-   * (`recordNonAttemptIfPossible` below catches and logs, content-free per
-   * D-005).
+   * Optional and best-effort: unwired, a skip or a close-without-answering
+   * writes nothing, never throws, and never blocks the UI transition it
+   * accompanies (`recordNonAttemptIfPossible` below catches and logs,
+   * content-free per D-005).
    *
-   * **Never called for an answer that reached `deps.grade`** (`[D-304]`): a
-   * submitted answer — flagged by some future local check or not — is
-   * graded and recorded as the review it is; this dep's only two callers are
-   * `skipPrompt` and `onClose`'s guard on the `'answering'` phase, neither of
-   * which is reachable once `submitAnswer` has run for the current attempt.
+   * **Never called for an answer she submitted** (`[D-304]`): its only two
+   * callers are `skipPrompt` and `onClose`'s guard on the `'answering'` phase.
    */
   readonly recordNonAttempt?: (params: {
     /** Every concept the prompt concerned (D7.1's non-empty `conceptIds`). Never called when this would be `[]` — see `./skip.ts`'s `canRecordNonAttempt`. */
     readonly conceptIds: readonly string[];
-    /** ISO-8601 with offset, the moment she left the prompt (the skip taken, or the close handled) — this view's own clock (`this.now`), the same "this view is the only place that can observe it" reasoning `durationMs` (`ol-yj0k`) already documents above. */
+    /** ISO-8601 with offset, the moment she left the prompt (the skip taken, or the close handled) — this view's own clock (`this.now`). */
     readonly timestamp: string;
   }) => Promise<void>;
   /**
-   * `[D-416]` (`ol-egov.141.89.6.63`): writes the attempt she set aside with
-   * Try again as its own `explain-back-set-aside` review-log record — core's
-   * `appendExplainBackSetAsideRecord`, wrapped with a vault and device id by
-   * `./set-aside-record.ts`'s `createRecordSetAsideAttempt`. The input is
-   * built here (`setAsideRecordInput`) from the entry `discardGrading` just
-   * appended to the view's sequence: ids, the verdict with its call's stamp,
-   * the rung and the duration, never her answer or the feedback (D-005).
+   * D7.1, `[D-614]` (`ol-egov.141.89.6.129`): writes the practice explanation
+   * for one answer she leaves by "Done" or "Try again" —
+   * `./practice-record.ts`'s `createRecordPracticeExplanation` over
+   * `olea-core`'s `recordPracticeExplanation`, with the offer's trigger and
+   * event id closed over by the composition root (the same reason
+   * `recordNonAttempt` takes no trigger). Idempotent on the attempt id.
    *
-   * Optional and best-effort, same posture as `recordNonAttempt`: unwired,
-   * Try again writes nothing (the sequence is still kept in the view); a
-   * failed write is caught and logged content-free, never thrown, and never
-   * delays the return to answering.
+   * Optional and best-effort, the same posture as `recordNonAttempt`:
+   * unwired, nothing is written; a rejection (validation or vault failure) is
+   * caught and logged content-free (D-005), never thrown at her, and never
+   * delays leaving the answer.
    */
+  readonly recordPracticeExplanation?: RecordViewPracticeExplanation;
+  /** **Dormant in v0.9** (`[D-603]`, `[D-416]`): the graded path's set-aside record. Never called by the practice view. */
   readonly recordSetAsideAttempt?: (input: ExplainBackSetAsideLogRecordInput) => Promise<void>;
   /**
-   * Row 50 (`ol-egov.141.89.6.69`): reads her log for the earlier attempts at
-   * one question, so a view opened in a later session knows whether she was
-   * shown the feedback and which attempt a new one follows —
-   * `./set-aside-record.ts`'s `createReadLoggedAttemptState`. Read once, when
-   * the question is resolved, never at submit.
-   *
-   * Optional, same posture as `recordSetAsideAttempt`: unwired, the view
-   * knows only this view's own sequence and the session note, exactly as
-   * before this field existed. Wired, a read that fails is unknown exposure
-   * (no rung recorded), never not shown and never guided.
+   * **Dormant in v0.9** (`[D-603]`): the graded path's read of earlier
+   * attempts, for sealing a graded attempt's rung. The practice view does not
+   * read it: the practice explanation's writer reads her log itself, at write
+   * time, for the support shown before each answer (D7.1).
    */
   readonly readLoggedAttemptState?: ReadLoggedAttemptState;
   /**
-   * `[D-460]` (`ol-egov.141.89.6.86`): writes the feedback exposure marker —
-   * the question, the attempt and the time — to her log BEFORE a graded
-   * result renders, so a reload after she read it cannot make a later
-   * attempt look like a first one. `./feedback-exposure.ts`'s
-   * `createRecordFeedbackShown` (core's `appendExplainBackFeedbackShownRecord`).
-   * Awaited in `submitAnswer`; see `recordFeedbackShownBeforeDisplay` for
-   * what a failed write does.
+   * `[D-460]` (`ol-egov.141.89.6.86`): writes the exposure marker — the
+   * question, the attempt and the time — to her log BEFORE the passages
+   * render, so a reload after she read them cannot make a later answer look
+   * unassisted (F5.4 as amended). `./feedback-exposure.ts`'s
+   * `createRecordFeedbackShown`. Awaited in `submitAnswer`; see
+   * `recordFeedbackShownBeforeDisplay` for what a failed write does.
    *
-   * Optional, same posture as `recordSetAsideAttempt`: unwired, nothing is
-   * written and the result renders exactly as before this field existed.
+   * Optional: unwired, nothing is written and the passages render as soon as
+   * she submits.
    */
   readonly recordFeedbackShown?: RecordFeedbackShown;
   /**
-   * Row 50: the session note of graded results already shown (see
+   * Row 50: the session note of exposures already shown (see
    * `./feedback-exposure.ts`'s `FeedbackExposureLedger`), injectable for a
-   * test. Defaults to the one every view in this plugin session shares, which
-   * is what lets a view opened again after she read the feedback and closed
-   * it, or after a set-aside write was lost, still know.
+   * test. Defaults to the one every view in this plugin session shares.
    */
   readonly feedbackExposureLedger?: FeedbackExposureLedger;
   /** Fires once, on close, however the modal was resolved — see the module doc's "hand-off" section. */
   readonly onClosed?: () => void;
   /**
    * `ol-yj0k`: the clock this view times an attempt's `durationMs` against —
-   * same INV-1 discipline `review/session.ts`'s injected `Clock` and
-   * `solo-review.ts`'s own `now` already use, never `Date.now()`/`new Date()`
-   * called inline at a measurement site. Optional because `main.ts`'s
-   * existing `openExplainBackModal` construction call (outside this bead's
-   * `owns`) does not wire one yet; the constructor falls back to the real
-   * wall clock so production behaviour is unchanged, and a test can still
-   * inject a fake. Wiring a real clock through from `main.ts` is a Class A
-   * follow-up, not required for correctness.
+   * never `Date.now()`/`new Date()` called inline at a measurement site.
+   * Optional; the constructor falls back to the real wall clock.
    */
   readonly now?: () => Date;
   /**
    * `[STY-0d]`, `ol-l5og.18.4`: the mastery tag (sprig + word) the design kit
-   * (`docs/design/pass3-explainback-sprig`) places on every explain-back
-   * screen — see `renderMasteryTag` below for exactly where and why it
-   * renders. Optional and best-effort, the same posture as
-   * `recordSoloGradeAndReview` above: `main.ts`'s existing
-   * `openExplainBackModal` construction call (outside this bead's `owns`) does
-   * not wire one yet, so the tag renders nothing today rather than a
-   * placeholder — never a fabricated stage for a concept whose real mastery
-   * state this view has no way to ask for. Wiring a real lookup through from
-   * `main.ts` (`packages/core/src/mastery/rollup.ts` already computes
-   * `MasteryState` per concept) is a small, disclosed follow-up in a file
-   * this bead does not own.
+   * places on every explain-back screen — see `renderMasteryTag` below.
+   * Optional and best-effort: absent, the tag renders nothing rather than a
+   * fabricated stage.
    */
   readonly getMasteryState?: (conceptId: string) => MasteryState | null;
   /**
-   * `ol-2zfj.75` (C7.9/F5.6): loads the transient misconception digest
-   * (`olea-core`'s `buildMisconceptionDigest`) for the instrument's own
-   * concept ids, so the judge sees "has she raised this specific confusion
-   * before, on this concept" per D-008/M4 — the same digest field
-   * `ExplainBackPromptContext.misconceptionDigest` already carries and
-   * `buildGradeExplainBackInputFromTypedAnswer` already forwards verbatim
-   * (`./request.ts`). Optional and best-effort, same posture as
-   * `getMasteryState`/`recordSoloGradeAndReview`: a caller that omits it (or
-   * whose load fails) gets the pre-existing `[]` default, never a thrown
-   * error mid-prompt. Called only from `resolveInstrumentPrompt` — a topic
-   * prompt (`resolveTopicPrompt`) has no known `subjectConceptId` to key a
-   * digest by, so it stays `[]` there, unchanged.
+   * **Dormant in v0.9** (`[D-603]`): the misconception digest, which this view
+   * loaded only to send to the correctness judge (`ol-2zfj.75`, C7.9/F5.6).
+   * The practice view sends nothing, so it no longer loads one; the digest
+   * function (`olea-core`'s `buildMisconceptionDigest`) keeps its own tests.
    */
   readonly loadMisconceptionDigest?: (
     conceptIds: readonly string[],
@@ -567,6 +329,14 @@ export interface ExplainBackModalDeps {
  * pure (no `Modal`, no `App`) so it is directly unit-testable, unlike the
  * class below (`obsidian`'s `package.json` `main` is `""`, so `Modal`
  * cannot be instantiated under Vitest — see this file's sibling specs).
+ *
+ * **In v0.9 this is F5.2a's lookup for the supporting passages** (`[D-603]`,
+ * `ol-egov.141.89.6.129`): the flattened `sourceBlocks` it returns are the
+ * passages the practice view shows after an answer — for a concept prompt the
+ * subject's defining passages, for a relation prompt also the edge's own
+ * provenance passages and the neighbour's defining passages — and nothing is
+ * sent to a grader. The material, `relationExpected` and the neighbour key are
+ * still returned unchanged for the graded path when it returns (F5.5).
  *
  * **Always runs through both core functions, concept-only or not.** The
  * concept-only branch is `buildGradingSourceMaterial`'s identity case
@@ -704,6 +474,12 @@ export interface ResolvedGradingSourceBlocks {
    * resolved, or the free-form topic entry point (`subjectConceptId === null`).
    */
   readonly neighbourConceptId: string | undefined;
+  /**
+   * `ol-egov.141.89.6.129` (`[D-611]`): the subject's and the neighbour's current wordings, for a
+   * relation prompt's third reflection prompt (vocabulary registry §39). Wordings only, never an
+   * identity. `undefined` exactly when `relationExpected` is `false`.
+   */
+  readonly relationNames: { readonly concept: string; readonly neighbour: string } | undefined;
 }
 
 export async function resolveGradingSourceBlocks(
@@ -722,11 +498,13 @@ export async function resolveGradingSourceBlocks(
     | undefined;
   let neighbourBlocks: readonly ExplainBackSourceBlock[] = [];
   let introducingBlocks: readonly ExplainBackSourceBlock[] = [];
+  let relationNames: ResolvedGradingSourceBlocks['relationNames'];
   if (partner !== undefined && subjectConceptId !== null) {
     // The partner is the OTHER end of the edge from the subject, named by key (an identity) and by
     // wording (a query): retrieval takes the wording, everything that identifies takes the key.
     const { edge, neighbourConceptId, neighbourName } = partner;
     neighbourBlocks = await deps.retrieveSourceBlocks(neighbourName);
+    relationNames = { concept: partner.subjectName, neighbour: neighbourName };
     const alreadyPresentBlockIds = new Set(
       [...sourceBlocks, ...neighbourBlocks].map((entry) => entry.block.blockId),
     );
@@ -748,6 +526,7 @@ export async function resolveGradingSourceBlocks(
       sourceMaterial: undefined,
       relationExpected: false,
       neighbourConceptId: undefined,
+      relationNames: undefined,
     };
   }
 
@@ -782,194 +561,93 @@ export async function resolveGradingSourceBlocks(
     sourceMaterial: material,
     relationExpected: relation.kind === 'relation',
     neighbourConceptId: named?.neighbourConceptId,
+    relationNames: relation.kind === 'relation' ? relationNames : undefined,
   };
 }
 
 interface ResolvedPrompt {
-  readonly context: ExplainBackPromptContext;
+  /** The question as she reads it (`./request.ts`'s prompt-context builders own its wording). */
+  readonly question: string;
   readonly subjectConceptId: string | null;
   /**
-   * `[D-322]`: true exactly when this prompt is designated practice-only — a freeform topic whose
-   * concept match was ambiguous or absent (`vocabulary registry §19`'s "Practice-only": shown to
-   * her before she answers, and the answer, if she gives one, is never resolved to the ambiguous
-   * concept as scored evidence). Always `false` for an instrument-seeded prompt
-   * (`resolveInstrumentPrompt`'s subject is already a real, resolved concept — this designation is
-   * a freeform-topic-only concern) and for a freeform topic that DID resolve uniquely. Read by
-   * `renderQuestion` to show `EXPLAIN_BACK_PRACTICE_ONLY_NOTICE`, and — reachability gap, disclosed
-   * — not yet read anywhere that would change what is written at accept time: `subjectConceptId`
-   * staying `null` already keeps an ambiguous or unmatched topic out of scored evidence
-   * structurally (see `resolveTopicPrompt`'s own doc), so this field's only job today is the
-   * upfront designation the ruling requires her to see.
+   * The question's id: the instrument's own id, or a fresh one for a free-form topic. The
+   * `[D-460]` marker and the practice explanation both carry it, so the writer can read an
+   * earlier attempt's exposure back from her log.
    */
-  readonly practiceOnly: boolean;
   readonly originInstrumentId: string;
-  readonly sourceBlocks: readonly ExplainBackSourceBlock[];
   /**
-   * `ol-egov.141.89.6.16`: the EXACT string passed to
-   * `deps.retrieveSourceBlocks` to produce `sourceBlocks` above — frozen
-   * here, at the retrieval call site, rather than re-derived from
-   * `context.question` at accept time (see `buildObservationContext`'s own
-   * `query` param doc on `ExplainBackModalDeps` for why the two can
-   * differ). `computeAcceptGrading` reads this field, never
-   * `context.question`, when it re-retrieves to check staleness.
+   * The supporting passages (F5.2, F5.2a): `resolveGradingSourceBlocks`'s lookup when the
+   * question was resolved, shown after an answer, never searched for again. For a free-form topic
+   * they are also the found list on the insufficient-notes refusal.
    */
-  readonly query: string;
+  readonly passages: readonly ExplainBackSourceBlock[];
+  /** The prompt's shape and, for a relation, the two wordings its reflection prompt names (registry §39). */
+  readonly shape: ExplainBackReflectionShape;
   /**
-   * `ol-0r92.104` [DOS-I9]: every concept this prompt concerned, for a
-   * non-attempt record's `conceptIds` (D7.1) — the full
-   * `instrument.conceptIds` for an instrument-seeded prompt, `[]` for a
-   * free-form topic entry (`resolveTopicPrompt`'s `subjectConceptId: null`
-   * is single-valued and reduced from the same absence; there is no wider
-   * list to fall back to). Deliberately the full list, not narrowed to
-   * `subjectConceptId` (`instrument.conceptIds[0]`) the way rendering above
-   * is — a non-attempt record should name every concept the prompt
-   * concerned, not just the one this view picked as "the" subject for
-   * display.
+   * `ol-0r92.104` [DOS-I9]: every concept this prompt concerned — the full
+   * `instrument.conceptIds` for an instrument-seeded prompt; for a free-form
+   * topic, the one concept it matched uniquely (`[D-322]`) or `[]`. Named by
+   * a non-attempt record and by the practice explanation (D7.1, `[0]` the
+   * concept explained); neither is written when it is empty.
    */
   readonly conceptIds: readonly string[];
   /**
-   * `ol-egov.141.89.6.50`: `resolveGradingSourceBlocks`'s own `sourceMaterial`
-   * for this prompt, carried to accept time (never re-derived there) so
-   * `computeAcceptGrading` can forward it to `deps.recordSoloGradeAndReview` —
-   * see that function's own doc and `./solo-review.ts`'s `RecordSoloGradeAndReviewParams
-   * .sourceMaterial`. `undefined` for the free-form topic entry point, which
-   * never builds one.
-   */
-  readonly sourceMaterial: GradingSourceMaterial | undefined;
-  /**
-   * `ol-egov.141.89.6.50`: `resolveGradingSourceBlocks`'s own `relationExpected`
-   * for this prompt, carried the same way as `sourceMaterial` above.
-   */
-  readonly relationExpected: boolean;
-  /**
-   * `ol-egov.141.89.6.75`: `resolveGradingSourceBlocks`'s own `neighbourConceptId` for this prompt
-   * (the causes partner's concept KEY, never its wording), carried to accept time the same way as
-   * `sourceMaterial` above so `computeAcceptGrading` can hand it to `deps.recordSoloGradeAndReview`.
-   * `undefined` when no partner resolved and for the free-form topic entry point.
-   */
-  readonly neighbourConceptId: string | undefined;
-  /**
-   * `[STY-9]` (`ol-l5og.18.19`): the seeding instrument's own `courseCode` (`../review/types.js`'s
-   * `ReviewInstrumentCommon`) — real data already flowing into `resolveInstrumentPrompt`, never
-   * fabricated. `null` for a free-form topic entry (`resolveTopicPrompt`): there is no instrument,
-   * so genuinely no course to report, the same "absent, never invented" posture `subjectConceptId`
-   * already takes for that entry point. `renderIdentityStrip` reads this to decide whether to
-   * render anything at all.
+   * `[STY-9]` (`ol-l5og.18.19`): the seeding instrument's own `courseCode` — real data, never
+   * fabricated. `null` for a free-form topic entry: there is no instrument. `renderIdentityStrip`
+   * reads this to decide whether to render anything at all.
    */
   readonly courseCode: string | null;
-  /**
-   * `[STY-9]`: the seeding instrument's own `noteTitle`, carried alongside `courseCode` — same
-   * source, same `null`-for-topic-entry posture. Together these are the closest real analogue this
-   * codebase has to the design kit's course/concept identity line (`docs/design/pass3-
-   * explainback-sprig/ui_kits/olea-plugin/ExplainBack.jsx`'s `Head`) — there is no separate
-   * "unit" field anywhere in the data model to report instead (checked: `ReviewInstrumentCommon`,
-   * `packages/core/src/registry/build.ts`'s concept shape); inventing one would be exactly the
-   * fabrication this bead's own report flags against.
-   */
+  /** `[STY-9]`: the seeding instrument's own `noteTitle`, carried alongside `courseCode`, same posture. */
   readonly noteTitle: string | null;
 }
 
-/**
- * `ol-0r92.56` (`[D-228 / SIG-3]`): the shape sealed at `submitAnswer` and
- * forwarded to `deps.recordSoloGradeAndReview`'s `answerEdits` param — see
- * that field's own doc. Named separately from the deps param's inline shape
- * only so `ModalState`'s two phases below can reference it without repeating
- * the object type.
- */
-type ModalAnswerEdits = { readonly firstEditMs: number | null; readonly editBursts: number };
+/** D7.1's `promptShape` for a prompt. */
+function promptShapeOf(prompt: ResolvedPrompt): ExplainBackPromptShape {
+  return prompt.shape.kind;
+}
 
 type ModalState =
   | { readonly phase: 'topic'; readonly topic: string }
   | { readonly phase: 'loading' }
   | { readonly phase: 'answering'; readonly prompt: ResolvedPrompt; readonly answer: string }
   | {
-      readonly phase: 'grading';
+      /**
+       * Between "Show the passages" and the passages appearing: the `[D-460]` marker is being
+       * written. Her question and her explanation stay on screen; no wait line (registry §39).
+       */
+      readonly phase: 'revealing';
       readonly prompt: ResolvedPrompt;
       readonly answer: string;
-      /** `ol-yj0k`: computed once at submission, carried through to `acceptGrading` — see `submitAnswer`'s doc. */
-      readonly durationMs: number | null;
-      /** `ol-0r92.94` [DOS-C1]: minted once per genuine attempt at submit time — see `submitAnswer`'s doc. */
+      /** `ol-0r92.94` [DOS-C1]: minted once per answer at submit — see `submitAnswer`'s doc. */
       readonly attemptId: string;
-      /** `ol-0r92.56` (`[D-228 / SIG-3]`): sealed alongside `durationMs`, same posture — see `submitAnswer`'s doc. */
-      readonly answerEdits: ModalAnswerEdits;
-      /** `[D-416]`: the rung and the attempt this one follows, sealed at submit — see `submitAnswer`'s doc. */
-      readonly support: SealedAttemptSupport;
+      /** `ol-yj0k`: computed once at submit — see `submitAnswer`'s doc. */
+      readonly durationMs: number | null;
     }
   | {
-      readonly phase: 'graded';
+      /** Her explanation, the passages, the reflection prompts, "Done" and "Try again" (F5.2, F5.4). */
+      readonly phase: 'passages';
       readonly prompt: ResolvedPrompt;
       readonly answer: string;
-      readonly pending: PendingExplainBackGrading;
-      readonly durationMs: number | null;
       readonly attemptId: string;
-      /** `ol-0r92.56` (`[D-228 / SIG-3]`): carried through to `acceptGrading` on Accept — see `submitAnswer`'s doc. */
-      readonly answerEdits: ModalAnswerEdits;
-      /** `[D-416]`: carried through to `acceptGrading` on Accept, and onto the sequence on Try again. */
-      readonly support: SealedAttemptSupport;
+      readonly durationMs: number | null;
     }
   | {
+      /**
+       * A free-form topic whose lookup found nothing to explain against (an empty reference): the
+       * insufficient-notes refusal, before any answer, exactly as before `[D-603]`.
+       */
       readonly phase: 'refused';
       readonly prompt: ResolvedPrompt;
-      readonly answer: string;
-      readonly reason: 'unavailable' | 'check-failed' | 'insufficient-notes';
-      readonly durationMs: number | null;
-      readonly attemptId: string;
-    }
-  | {
-      readonly phase: 'accepted';
-      readonly message: string | null;
-      /** `[D-217]`: the SOLO depth level `deps.recordSoloGradeAndReview` reported, if any — `null` renders no heading (see `renderAcceptedPhase`), never a placeholder. */
-      readonly soloLevel: SoloLevel | null;
     }
   | {
       /**
        * `ol-0r92.104` [DOS-I9] (`[D-273]`, `[D-305]`): reached only from the
-       * named skip action (`skipPrompt`) — never from `onClose`, which
-       * closes the whole `Modal` rather than rendering a further phase of
-       * it. A DEDICATED phase, not a reuse of `'accepted'` with `message`
-       * and `soloLevel` both `null`: those two fields being empty happens to
-       * render identically (see `renderSkippedPhase`), but `'accepted'`
-       * means a correctness verdict was actually accepted (`acceptGrading`
-       * ran `deps.acceptWithObservation`) — a skip never reaches that call
-       * at all (`[D-273]`: a skip grades nothing), so tagging it
-       * `'accepted'` would be a false structural claim any future reader of
-       * `this.state.phase` (an idempotency guard, a metric, a test) could
-       * reasonably rely on.
+       * named skip action (`skipPrompt`) — never from `onClose`, which closes
+       * the whole `Modal`. Nothing is shown: no passage, no reflection prompt,
+       * no line about the prompt (F5.2, F5.7).
        */
       readonly phase: 'skipped';
     };
-
-const SVG_NS = 'http://www.w3.org/2000/svg';
-
-/**
- * The retry mark (`docs/design/pass5-refusal-trends-shell/ui_kits/olea-
- * plugin/Pass5Kit.jsx`'s `RetryGlyph`, `olea-service`), reproduced
- * coordinate-for-coordinate — the same "copied, not reinterpreted"
- * discipline `sprig/render-sprig.ts` documents for its own SVG. Built via
- * `createElementNS` rather than Obsidian's `setIcon`: `setIcon` has no
- * export in the workbench's `obsidian-shim` (confirmed by a failed `esbuild`
- * bundle), and `gap/view.ts` carries the identical helper for the same
- * reason — small enough, and local enough to each file's own render method,
- * that duplicating it beat adding a new cross-package module for one glyph.
- */
-function renderRetryGlyph(container: HTMLElement): void {
-  const doc = container.ownerDocument;
-  const svg = doc.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('width', '13');
-  svg.setAttribute('height', '13');
-  svg.setAttribute('viewBox', '0 0 13 13');
-  for (const d of ['M11 6.5a4.5 4.5 0 1 1-1.5-3.35', 'M11.2 1.2v2.6H8.6']) {
-    const path = doc.createElementNS(SVG_NS, 'path');
-    path.setAttribute('d', d);
-    path.setAttribute('fill', 'none');
-    path.setAttribute('stroke', 'currentColor');
-    path.setAttribute('stroke-width', '1.3');
-    path.setAttribute('stroke-linecap', 'round');
-    path.setAttribute('stroke-linejoin', 'round');
-    svg.appendChild(path);
-  }
-  container.appendChild(svg);
-}
 
 export class ExplainBackModal extends Modal {
   private readonly deps: ExplainBackModalDeps;
@@ -977,97 +655,42 @@ export class ExplainBackModal extends Modal {
   private state: ModalState;
   private readonly now: () => Date;
   /**
-   * `ol-yj0k`: the moment the current prompt became visible to her, in the
-   * SAME sense `review/session.ts`'s own `presentedAtMs` field uses for
-   * QA/cloze/MCQ — set whenever a prompt enters the `'answering'` phase
-   * (first resolution, or re-entry after discarding a grading to retry), and
-   * read once, at the top of `submitAnswer`, to produce `durationMs`. An
-   * instance field rather than part of `ModalState.answering` for the same
-   * reason `session.ts` keeps it off `ReviewQueueItem`: it is timing
-   * bookkeeping for the CURRENT attempt, not state the render tree needs.
+   * `ol-yj0k`: the moment the current prompt became visible to her — set
+   * whenever a prompt enters the `'answering'` phase (first resolution, or
+   * re-entry after "Try again"), and read once, at the top of `submitAnswer`,
+   * to produce `durationMs`.
    */
   private presentedAtMs: number | null = null;
 
   /**
-   * `ol-0r92.56` (`[D-228 / SIG-3]`): the moment the FIRST `'input'` event
-   * fired on the answering textarea since `presentedAtMs` was most recently
-   * stamped — reset alongside `presentedAtMs`, at the same three sites
-   * (`resolveInstrumentPrompt`, `resolveTopicPrompt`, `discardGrading`), so
-   * `firstEditMs` shares `durationMs`'s own "this attempt" clock origin
-   * (`presentedAtMs`), never the whole session's. `null` means no input has
-   * fired yet since that reset — evidences she has not started typing, or
-   * she submitted a discard-preserved answer untouched — and is read once,
-   * at the top of `submitAnswer`, mirroring `durationMs`'s own read.
+   * D7.1, `[D-614]`: the attempts at the current question she left by "Try
+   * again", oldest first. Each later answer's practice explanation names the
+   * passages shown after them (`passagesShownInView`), so "Try again" never
+   * erases that exposure. Reset only when a new question is resolved.
    */
-  private firstEditAtMs: number | null = null;
+  private attemptsLeftByTryAgain: readonly string[] = [];
 
   /**
-   * `ol-0r92.56` (`[D-228 / SIG-3]`): how many times she has been presented
-   * with a FRESH answering textarea and typed into it — incremented at most
-   * once per `renderAnsweringPhase` call, on that call's own first `'input'`
-   * event, never per keystroke (a per-keystroke count is `keystrokeCount`,
-   * REJECTED by `[D-228]`). Deliberately NOT reset alongside `presentedAtMs`
-   * / `firstEditAtMs` above: it lives on the modal for the instance's whole
-   * life, so it keeps counting across a discard-and-retry re-render — see
-   * `features/F5-explain-it-back.md`'s "the counter survives the modal
-   * re-rendering the answering phase" scenario, which this field exists to
-   * satisfy. This is the one part of `[D-228]`'s operational definition this
-   * bead can build without inventing a number: the ruling's own analysis
-   * describes bursts as "coalescing keystrokes separated by less than an
-   * idle threshold," but no such threshold is stated anywhere in the ruling,
-   * the build bead, or an existing declared constant for composition-scale
-   * pauses (`DEFAULT_SITTING_IDLE_THRESHOLD_MS` is 15 minutes, for session
-   * gaps, not composing one answer) — per `[D-194]`, an unstated number is
-   * reported rather than guessed. So THIS implementation counts distinct
-   * fresh-textarea presentations she typed into, not idle-gap-coalesced
-   * keystroke runs within one presentation; see this bead's report for the
-   * open follow-up if within-presentation pause/resume detection is wanted.
+   * The attempts whose practice explanation this view has already asked the
+   * writer for, so a second click on "Done" or "Try again" for the same
+   * answer is not a second write. The writer is idempotent on the attempt id
+   * as well, which is what covers a reopen or a reload.
    */
-  private editBursts = 0;
-
-  /**
-   * `ol-0r92.94` [DOS-C1]: the in-flight-memo half of the idempotency
-   * guarantee — see `acceptGrading`'s own doc for why this is a SEPARATE
-   * guarantee from `recordGradedExplainBackReview`'s durable, restart-safe
-   * check, not a substitute for it. Keyed on `attemptId`, never
-   * `prompt.originInstrumentId`: two GENUINE attempts at the same instrument
-   * must never share a memo entry, only two calls for the identical attempt
-   * (a double-click before the first `acceptGrading` call resolves) may.
-   */
-  private readonly acceptInFlightByAttempt = new Map<string, Promise<void>>();
-
-  /**
-   * `[D-416]` (`ol-egov.141.89.6.63`): every attempt at the current question
-   * she chose Try again on, oldest first — see `./attempt-sequence.ts`. Only
-   * `discardGrading` grows it, and only by appending; it is reset solely when
-   * a new question is resolved (`resolveInstrumentPrompt`,
-   * `resolveTopicPrompt`), so no retry ever erases an earlier attempt.
-   */
-  private attemptSequence: ExplainBackAttemptSequence = EMPTY_ATTEMPT_SEQUENCE;
-
-  /**
-   * Row 50 (`ol-egov.141.89.6.69`): what was known about the current question
-   * before this view's own sequence began — resolved once, in
-   * `resolveInstrumentPrompt`, before the answering phase appears — and sealed
-   * into every attempt at `submitAnswer`. A freeform topic has a fresh id
-   * every time, so it always starts from nothing.
-   */
-  private priorAttemptState: PriorAttemptState = NO_PRIOR_ATTEMPT;
+  private readonly practiceRecorded = new Set<string>();
 
   /** Row 50: `deps.feedbackExposureLedger`, or the session-wide one. */
   private readonly feedbackExposureLedger: FeedbackExposureLedger;
 
   /**
-   * `[D-460]`: set once Obsidian closes this view. A graded result that
-   * arrives after that is never displayed, so nothing records it as shown:
-   * no marker, no session note.
+   * `[D-460]`: set once Obsidian closes this view. Passages that would appear
+   * after that are never displayed.
    */
   private closed = false;
 
   /**
-   * `[D-460]`: the marker for the graded result on screen, held only while its
-   * write before display has failed, so `onClose` can try it once more if she
-   * leaves the result without Try again or accepting. `null` otherwise.
+   * `[D-460]`: the marker for the passages on screen, held only while its
+   * write before display has failed, so it can be written once more when she
+   * leaves the passages. `null` otherwise.
    */
   private unwrittenFeedbackShown: ExplainBackFeedbackShownLogRecordInput | null = null;
 
@@ -1091,34 +714,14 @@ export class ExplainBackModal extends Modal {
   override onClose(): void {
     // `ol-0r92.104` [DOS-I9] (`[D-306]`): a prompt she opened and closed
     // without submitting is recorded the same way a named skip is — one
-    // non-attempt event, never which exit she took. `'answering'` is the
-    // ONLY phase that means "the question is on screen and she has not yet
-    // submitted": `'topic'`/`'loading'` precede a resolved prompt entirely
-    // (nothing was opened to leave), and every other phase
-    // (`'grading'`/`'graded'`/`'refused'`/`'accepted'`/`'skipped'`) is
-    // reachable only after `submitAnswer` already sent an answer to
-    // `deps.grade` (or, for `'skipped'`, after the skip's own write already
-    // ran) — see `submitAnswer`'s and `skipPrompt`'s own call sites, which
-    // are this file's only two routes off `'answering'` besides this one.
-    // Fire-and-forget: `onClose` is synchronous (`Modal`'s own signature),
-    // so this cannot be awaited, and `recordNonAttemptIfPossible` never
-    // throws (see its own doc).
+    // non-attempt event, never which exit she took. `'answering'` is the ONLY
+    // phase that means "the question is on screen and she has not yet
+    // submitted". Fire-and-forget: `onClose` is synchronous, and
+    // `recordNonAttemptIfPossible` never throws.
     if (this.state.phase === 'answering') void this.recordNonAttemptIfPossible(this.state.prompt);
-    // `[D-460]`: she leaves a graded result whose marker never reached her log,
-    // with neither Try again (whose set-aside record says she saw it) nor
-    // accept (which ends the exchange). One more write, fire-and-forget, so a
-    // later session does not read her next attempt as a first one. Writing
-    // twice is harmless if the first had in fact landed.
-    const unwritten = this.unwrittenFeedbackShown;
-    this.unwrittenFeedbackShown = null;
-    if (
-      unwritten !== null &&
-      this.state.phase === 'graded' &&
-      this.state.attemptId === unwritten.attemptId &&
-      this.deps.recordFeedbackShown
-    ) {
-      void writeFeedbackShown(this.deps.recordFeedbackShown, unwritten);
-    }
+    // `[D-460]`: she leaves the passages without "Done" or "Try again" and their marker never
+    // reached her log: one more write, so a later answer is not read as written before them.
+    if (this.state.phase === 'passages') this.writeUnwrittenFeedbackShown(this.state.attemptId);
     this.closed = true;
     this.contentEl.empty();
     this.deps.onClosed?.();
@@ -1128,274 +731,113 @@ export class ExplainBackModal extends Modal {
     const query = questionQuery(instrument);
     const sourceBlocks = await this.deps.retrieveSourceBlocks(query);
     const subjectConceptId = instrument.conceptIds[0] ?? null;
-    // `ol-egov.141.89.6.33`: widened ONLY for what the judge is sent
-    // (`context` below) — `prompt.sourceBlocks` a few lines down stays the
-    // plain retrieval, unchanged, because it also feeds the accept-time
-    // staleness comparison (`main.ts`'s `buildExplainBackObservationContextFor`,
-    // re-retrieving against `prompt.query`, frozen below to this exact
-    // `query` — never re-derived from `context.question`, which can be a
-    // different string; see `ResolvedPrompt.query`'s own doc,
-    // `ol-egov.141.89.6.16`) and a comparison against a widened list would
-    // misreport every relation-aware accept as stale. See
-    // `resolveGradingSourceBlocks`'s own doc for why concept-only (every
-    // subject until a `causes` edge is served, which needs the deployed
-    // service prompt that offers it) leaves this identical to
-    // `sourceBlocks` regardless.
-    const resolvedGrading = await resolveGradingSourceBlocks(
-      this.deps,
-      subjectConceptId,
-      sourceBlocks,
-    );
-    const gradingSourceBlocks = resolvedGrading.sourceBlocks;
-    // `ol-2zfj.75` (C7.9/F5.6): a real digest when the concept(s) this
-    // instrument targets have prior misconception history, `[]` otherwise —
-    // never thrown into the prompt-resolution path (see the dep's own doc).
-    const misconceptionDigest =
-      instrument.conceptIds.length > 0 && this.deps.loadMisconceptionDigest
-        ? await this.deps.loadMisconceptionDigest(instrument.conceptIds)
-        : [];
-    const context = buildExplainBackPromptContextFromInstrument(
-      instrument,
-      gradingSourceBlocks,
-      misconceptionDigest,
-      // `[D-482]` item 4: the subject, plus the resolved neighbour, are the only ids a
-      // misconception candidate may bind to.
-      permittedConceptIdsFor(subjectConceptId, resolvedGrading.neighbourConceptId),
-    );
+    // F5.2a's lookup, done once, here: the passages she is shown after answering are these, never
+    // a fresh search. A resolved causes partner makes this a relation prompt.
+    const lookup = await resolveGradingSourceBlocks(this.deps, subjectConceptId, sourceBlocks);
     const prompt: ResolvedPrompt = {
-      context,
+      question: buildExplainBackPromptContextFromInstrument(instrument, lookup.sourceBlocks)
+        .question,
       subjectConceptId,
-      // An instrument-seeded prompt's subject is already a real, resolved concept — `[D-322]`'s
-      // designation is a freeform-topic-only concern (see `ResolvedPrompt.practiceOnly`'s own
-      // doc).
-      practiceOnly: false,
       originInstrumentId: instrument.instrumentId,
-      sourceBlocks,
+      passages: lookup.sourceBlocks,
+      shape:
+        lookup.relationExpected && lookup.relationNames !== undefined
+          ? { kind: 'relation', ...lookup.relationNames }
+          : { kind: 'concept' },
       conceptIds: instrument.conceptIds,
-      query,
-      // `ol-egov.141.89.6.50`: carried to accept time — see `ResolvedPrompt
-      // .sourceMaterial`'s own doc.
-      sourceMaterial: resolvedGrading.sourceMaterial,
-      relationExpected: resolvedGrading.relationExpected,
-      neighbourConceptId: resolvedGrading.neighbourConceptId,
-      // `[STY-9]`: real, already-available instrument fields — see `ResolvedPrompt.courseCode`'s
-      // own doc for why this is honest here and `null` for the freeform entry point below.
+      // `[STY-9]`: real, already-available instrument fields — see `ResolvedPrompt.courseCode`.
       courseCode: instrument.courseCode,
       noteTitle: instrument.noteTitle,
     };
-    // Row 50: resolved BEFORE the answering phase appears, so the first submit
-    // stays synchronous and the fact is settled before she can write anything.
-    this.priorAttemptState = await resolvePriorAttemptState({
-      instrumentId: prompt.originInstrumentId,
-      ledger: this.feedbackExposureLedger,
-      readLogged: this.deps.readLoggedAttemptState,
-    });
-    this.presentedAtMs = this.now().getTime();
-    this.firstEditAtMs = null;
-    this.attemptSequence = EMPTY_ATTEMPT_SEQUENCE;
-    this.state = { phase: 'answering', prompt, answer: '' };
-    this.render();
+    this.enterNewQuestion(prompt);
   }
 
   private async resolveTopicPrompt(topic: string): Promise<void> {
     this.state = { phase: 'loading' };
     this.render();
     const sourceBlocks = await this.deps.retrieveSourceBlocks(topic);
-    // `ol-egov.141.89.6.33`: a topic prompt's `subjectConceptId` is always
-    // `null` below — there is genuinely no concept id for a topic she typed
-    // herself — so `resolveGradingSourceBlocks` always returns `sourceBlocks`
-    // unchanged here (see that function's own doc); called anyway so both
-    // entry points share the one code path through
-    // `resolveGradingRelationContext`, never a second, divergent one.
-    const resolvedGrading = await resolveGradingSourceBlocks(this.deps, null, sourceBlocks);
-    const gradingSourceBlocks = resolvedGrading.sourceBlocks;
+    // A topic she typed herself is looked up by the topic alone, as before `[D-603]`: the
+    // lookup's `null` subject returns the retrieval unchanged, and the prompt is a concept prompt.
+    const lookup = await resolveGradingSourceBlocks(this.deps, null, sourceBlocks);
     // `[D-322]` (`ol-egov.141.89.6.4`): resolve the freeform topic to one subject concept HERE, at
-    // composition time, before she ever sees an answer box — never left for later, and never
-    // silently unset. `matchFreeformTopicConcept` absent (no production composer wires it yet —
-    // see that dep's own doc), or one that returns `undefined`, reads as `'no-match'`: the SAME
-    // `subjectConceptId: null` this bead found here, now carrying the practice-only designation
-    // the ruling requires rather than silently omitting one.
+    // composition time, before she ever sees an answer box. Absent, or `undefined`, is no match.
     const topicMatch: FreeformTopicConceptMatch = this.deps.matchFreeformTopicConcept?.(topic) ?? {
       kind: 'no-match',
     };
     const subjectConceptId = topicMatch.kind === 'unique' ? topicMatch.conceptId : null;
-    const practiceOnly = topicMatch.kind !== 'unique';
     const conceptIds = topicMatch.kind === 'unique' ? [topicMatch.conceptId] : [];
-    // `[D-482]` item 4: a free topic (no unique match) permits no concept id at all.
-    const context = buildExplainBackPromptContextFromTopic(
-      topic,
-      gradingSourceBlocks,
-      [],
-      permittedConceptIdsFor(subjectConceptId),
-    );
-    if (context.referenceAnswer.trim() === '') {
-      const prompt: ResolvedPrompt = {
-        context,
-        subjectConceptId,
-        practiceOnly,
-        originInstrumentId: this.deps.generateInstrumentId(),
-        sourceBlocks,
-        query: topic,
-        conceptIds,
-        sourceMaterial: resolvedGrading.sourceMaterial,
-        relationExpected: resolvedGrading.relationExpected,
-        neighbourConceptId: resolvedGrading.neighbourConceptId,
-        // `[STY-9]`: a freeform topic has no seeding instrument, so genuinely no course to
-        // report — see `ResolvedPrompt.courseCode`'s own doc.
-        courseCode: null,
-        noteTitle: null,
-      };
-      // Never shown an answer box — insufficient-notes is a refusal before
-      // any prompt existed to present, so no `presentedAtMs` is set here,
-      // and this `attemptId` is minted but never used for an accept (there
-      // is nothing to accept from this state — `renderRefusedPhase` offers
-      // no accept action for it).
-      this.state = {
-        phase: 'refused',
-        prompt,
-        answer: '',
-        reason: 'insufficient-notes',
-        durationMs: null,
-        attemptId: this.deps.generateInstrumentId(),
-      };
-      this.render();
-      return;
-    }
+    const context = buildExplainBackPromptContextFromTopic(topic, lookup.sourceBlocks);
     const prompt: ResolvedPrompt = {
-      context,
+      question: context.question,
       subjectConceptId,
-      practiceOnly,
       originInstrumentId: this.deps.generateInstrumentId(),
-      sourceBlocks,
-      query: topic,
+      passages: lookup.sourceBlocks,
+      shape: { kind: 'concept' },
       conceptIds,
-      sourceMaterial: resolvedGrading.sourceMaterial,
-      relationExpected: resolvedGrading.relationExpected,
-      neighbourConceptId: resolvedGrading.neighbourConceptId,
-      // `[STY-9]`: same as the insufficient-notes branch above — no instrument, no course.
+      // `[STY-9]`: a freeform topic has no seeding instrument, so genuinely no course to report.
       courseCode: null,
       noteTitle: null,
     };
-    // Row 50: a topic she typed has a fresh id every time, so nothing earlier can be about it.
-    this.priorAttemptState = NO_PRIOR_ATTEMPT;
+    if (context.referenceAnswer.trim() === '') {
+      // Nothing to explain against: the insufficient-notes refusal, before any answer box, as
+      // before `[D-603]`. No prompt is presented, so nothing is timed.
+      this.state = { phase: 'refused', prompt };
+      this.render();
+      return;
+    }
+    this.enterNewQuestion(prompt);
+  }
+
+  /** A newly resolved question: a fresh clock, no earlier attempts in this view, an empty answer box. */
+  private enterNewQuestion(prompt: ResolvedPrompt): void {
     this.presentedAtMs = this.now().getTime();
-    this.firstEditAtMs = null;
-    this.attemptSequence = EMPTY_ATTEMPT_SEQUENCE;
+    this.attemptsLeftByTryAgain = [];
     this.state = { phase: 'answering', prompt, answer: '' };
     this.render();
   }
 
   /**
-   * `ol-yj0k`: `durationMs` is computed HERE, at the moment she submits —
-   * matching `contracts/review-log.ts`'s own field doc for every other
-   * instrument type, "milliseconds from presentation to answer" — never at
-   * write time (`acceptGrading`/`solo-review.ts`), which can run long after
-   * this, following the Worker's grading round-trip and however long she
-   * takes to read the verdict before clicking Accept. `Math.max(0, …)`
-   * mirrors `review/session.ts`'s own `logAndAdvance` guard against a clock
-   * that runs backwards between the two reads.
+   * "Show the passages" (F5.2, `[D-603]`). Sends nothing anywhere: the
+   * passages are already on her device. In order:
+   *
+   * 1. `durationMs` is computed HERE, at the moment she submits (`ol-yj0k`:
+   *    milliseconds from presentation to answer), and `attemptId` is minted
+   *    here, once per answer (`ol-0r92.94`).
+   * 2. The session note and the `[D-460]` marker record the exposure, and the
+   *    passages render only once the marker write has settled (F5.4). A
+   *    closed view shows nothing and records nothing as shown.
+   *
+   * Her text stays in memory until she leaves the answer; it is written only
+   * by the practice explanation, to the content store (D7.1).
    */
   private async submitAnswer(prompt: ResolvedPrompt, answer: string): Promise<void> {
+    if (this.closed) return;
     const durationMs =
       this.presentedAtMs !== null ? Math.max(0, this.now().getTime() - this.presentedAtMs) : null;
-    // `ol-0r92.56` (`[D-228 / SIG-3]`): sealed HERE, the same moment and the
-    // same read-once posture `durationMs` above takes — see
-    // `this.firstEditAtMs`'s and `this.editBursts`'s own docs for what each
-    // half measures. `firstEditMs` shares `durationMs`'s clock origin
-    // (`presentedAtMs`) and is `null` under the identical guard; `editBursts`
-    // is read as-is, since it is never reset by this attempt's own clock.
-    const answerEdits: ModalAnswerEdits = {
-      firstEditMs:
-        this.presentedAtMs !== null && this.firstEditAtMs !== null
-          ? Math.max(0, this.firstEditAtMs - this.presentedAtMs)
-          : null,
-      editBursts: this.editBursts,
-    };
-    // `ol-0r92.94` [DOS-C1]: minted HERE, once per genuine attempt at
-    // submit — never `prompt.originInstrumentId`, which is the instrument's
-    // own id and is the SAME value across every attempt she makes at it
-    // (real instruments) or a per-prompt id that still does not distinguish
-    // a retry-after-discard from the attempt it replaces (topic prompts).
-    // `deps.generateInstrumentId` is reused rather than adding a new
-    // required dep field — it is already "a stable id... distinct from any
-    // card/MCQ id space" (its own doc), which is exactly what an attempt id
-    // needs, and reusing it keeps `main.ts`'s existing deps literal
-    // (outside this bead's `owns`) unchanged.
     const attemptId = this.deps.generateInstrumentId();
-    // `[D-416]`: sealed HERE, at submit, from what she had seen BEFORE writing
-    // this answer — never at accept, when she has also read this answer's own
-    // graded result. An earlier graded attempt in the sequence makes this one
-    // guided; otherwise the answering phase's own reading stands. See
-    // `./attempt-sequence.ts`'s module doc.
-    const support = sealAttemptSupport(
-      this.attemptSequence,
-      EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,
-      this.priorAttemptState,
-    );
-    this.state = { phase: 'grading', prompt, answer, durationMs, attemptId, answerEdits, support };
+    this.state = { phase: 'revealing', prompt, answer, attemptId, durationMs };
     this.render();
-
-    const input = buildGradeExplainBackInputFromTypedAnswer(answer, prompt.context);
-    // `[D-482]`: bounded, typed, and attempt-guarded — see `./grading-attempt.ts`. A hung, failed
-    // or unusable call is the existing could-not-check refusal and writes nothing; a result that
-    // settles after Try again started a newer attempt is `superseded` and ignored here.
-    const outcome = await runGradingAttempt({
-      grade: (gradeInput) => this.deps.grade(gradeInput),
-      input,
-      isCurrent: () => this.state.phase === 'grading' && this.state.attemptId === attemptId,
-    });
-    if (outcome.kind === 'superseded') return;
-    if (outcome.kind === 'unavailable' || outcome.kind === 'refused') {
-      this.state = {
-        phase: 'refused',
-        prompt,
-        answer,
-        reason: outcome.kind === 'unavailable' ? 'unavailable' : outcome.reason,
-        durationMs,
-        attemptId,
-      };
-      this.render();
+    // Row 50: the passages are about to be shown, so this session knows she was exposed.
+    this.feedbackExposureLedger.noteShown(prompt.originInstrumentId, attemptId);
+    // `[D-460]`: the marker reaches her log BEFORE the passages render.
+    await this.recordFeedbackShownBeforeDisplay(prompt.originInstrumentId, attemptId);
+    if (this.closed || this.state.phase !== 'revealing' || this.state.attemptId !== attemptId) {
       return;
     }
-    const pending = outcome.pending;
-    if (pending.grading.outcome === 'graded') {
-      // `[D-460]`: a closed view displays nothing, so nothing is recorded as shown.
-      if (this.closed) return;
-      // Row 50: a graded result is about to be shown to her, so the session now
-      // knows she was exposed, whatever she does next (accept, Try again, or
-      // close). An attempt the check could not assess shows her no feedback.
-      this.feedbackExposureLedger.noteShown(prompt.originInstrumentId, attemptId);
-      // `[D-460]`: the marker reaches her log BEFORE the result renders, so a
-      // reload after she has read it cannot hide that she did.
-      await this.recordFeedbackShownBeforeDisplay(prompt.originInstrumentId, attemptId);
-      if (this.closed || this.state.phase !== 'grading' || this.state.attemptId !== attemptId) {
-        return;
-      }
-    }
-    this.state = {
-      phase: 'graded',
-      prompt,
-      answer,
-      pending,
-      durationMs,
-      attemptId,
-      answerEdits,
-      support,
-    };
+    this.state = { phase: 'passages', prompt, answer, attemptId, durationMs };
     this.render();
   }
 
   /**
-   * `[D-460]` (`ol-egov.141.89.6.86`): writes the feedback exposure marker for
-   * the graded result `submitAnswer` is about to show, and returns only once
-   * the write has settled, so the result never renders before its marker.
+   * `[D-460]` (`ol-egov.141.89.6.86`): writes the exposure marker for the
+   * passages `submitAnswer` is about to show, and returns only once the write
+   * has settled, so the passages never render before their marker.
    *
-   * **A failed write** is absorbed (`writeFeedbackShown`): the result still
-   * renders and she is never told. The session note `submitAnswer` wrote just
-   * before this, and this view's own sequence once she chooses Try again,
-   * hold the exposure as shown, so a revision in this session is sealed
-   * guided, never independent, and never read as not shown. The marker is
-   * kept in `unwrittenFeedbackShown` for `onClose` to try once more. Unwired
+   * **A failed write** is absorbed (`writeFeedbackShown`): the passages still
+   * render and she is never told. The view holds the exposure as shown (the
+   * next answer's practice explanation names these passages, by digest) and
+   * so does the session note; the marker is kept in `unwrittenFeedbackShown`
+   * to be written once more when she leaves the passages. Unwired
    * (`deps.recordFeedbackShown` absent), nothing is written.
    */
   private async recordFeedbackShownBeforeDisplay(
@@ -1410,319 +852,108 @@ export class ExplainBackModal extends Modal {
   }
 
   /**
-   * `ol-0r92.94` [DOS-C1]: the in-flight-memo guard. A double-click before
-   * the first accept resolves is the concrete failure this closes — the
-   * graded phase's Accept button (`renderGradedPhase`) has no `disabled`
-   * state while `acceptGrading`'s promise is outstanding, so two clicks
-   * before the state transitions to `'accepted'` previously fired two
-   * independent runs: two `acceptWithObservation` calls (one guarded
-   * against by `wiring.ts`'s own attempt-keyed memo, see that file) AND,
-   * with no equivalent guard here before this bead, two
-   * `recordSoloGradeAndReview` calls each minting their own SOLO grade and
-   * appending their own review-log event. Memoizing HERE, by `attemptId`,
-   * makes a second concurrent call for the SAME attempt share the first
-   * call's one in-flight `Promise` rather than starting a second run —
-   * distinct from `recordGradedExplainBackReview`'s own durable check
-   * (`explain-back-grade-write.ts`'s doc), which is what protects a
-   * SEQUENTIAL retry after a restart, when no in-flight `Promise` survives
-   * to be shared.
+   * `[D-460]`, `[D-520]`: the one retry of a marker whose write before display
+   * failed, made as she leaves the passages ("Done", "Try again", or closing
+   * the view). Writing it twice is harmless. Fire-and-forget; never throws.
    */
-  private acceptGrading(
-    prompt: ResolvedPrompt,
-    answer: string,
-    pending: PendingExplainBackGrading,
-    durationMs: number | null,
-    attemptId: string,
-    answerEdits: ModalAnswerEdits,
-    support: SealedAttemptSupport,
-  ): Promise<void> {
-    const inFlight = this.acceptInFlightByAttempt.get(attemptId);
-    if (inFlight) return inFlight;
-    const promise = this.computeAcceptGrading(
-      prompt,
-      answer,
-      pending,
-      durationMs,
-      attemptId,
-      answerEdits,
-      support,
-    );
-    this.acceptInFlightByAttempt.set(attemptId, promise);
-    return promise;
+  private writeUnwrittenFeedbackShown(attemptId: string): void {
+    const unwritten = this.unwrittenFeedbackShown;
+    this.unwrittenFeedbackShown = null;
+    if (unwritten === null || unwritten.attemptId !== attemptId) return;
+    if (this.deps.recordFeedbackShown) {
+      void writeFeedbackShown(this.deps.recordFeedbackShown, unwritten);
+    }
   }
 
-  private async computeAcceptGrading(
+  /**
+   * "Done" (registry §39): she leaves the answer. Its practice explanation is
+   * written (D7.1), the marker is written once more if its first write
+   * failed, and the view closes. Nothing is said about how she did.
+   */
+  private finishPractice(
     prompt: ResolvedPrompt,
     answer: string,
-    pending: PendingExplainBackGrading,
-    durationMs: number | null,
     attemptId: string,
-    answerEdits: ModalAnswerEdits,
-    support: SealedAttemptSupport,
-  ): Promise<void> {
-    // `[ol-egov.141.89.6.18]`: read BEFORE either write this call makes (the
-    // correctness accept just below, then `recordSoloGradeAndReview`'s own
-    // SOLO write) — see `isConfirmedFirstFullDepth`'s own doc
-    // (`./first-full-depth.ts`) for why a read taken after either write
-    // would be too late.
-    const isFirstFullDepth = isConfirmedFirstFullDepth(
-      prompt.subjectConceptId,
-      this.deps.getMasteryState,
-    );
-    const context = {
-      ...(await this.deps.buildObservationContext({
-        subjectConceptId: prompt.subjectConceptId,
-        permittedConceptIds: prompt.context.permittedConceptIds ?? [],
-        originInstrumentId: prompt.originInstrumentId,
-        sourceBlocks: prompt.sourceBlocks,
-        // `ol-egov.141.89.6.16`: the frozen retrieval query, never
-        // `prompt.context.question` — see `ResolvedPrompt.query`'s own doc
-        // for why the two can differ (cloze's blank marker, every topic
-        // prompt's "In your own words: explain …" wrapper).
-        query: prompt.query,
-      })),
-      // `ol-0r92.94` [DOS-C1]: attached here, after `buildObservationContext`
-      // resolves, rather than threaded through that dep's own params —
-      // widening those params would require `main.ts`'s real implementation
-      // (outside this bead's `owns`) to supply a field it has no reason to
-      // know about yet. `attemptId` is never the instrument id this context
-      // already carries; see `wiring.ts`'s `AcceptExplainBackGradingWithObser
-      // vationContext.attemptId` doc for what it keys.
-      attemptId,
-      // `[D-512]` (`ol-egov.141.89.6.93`): the sealed feedback exposure, not
-      // the guided rung (which the source open beside her also sets): only
-      // `'shown'` means she read feedback on this question first.
-      afterFeedback: support.feedbackExposure === 'shown',
-    };
-    const result = await this.deps.acceptWithObservation(pending, context);
-    // Row 50 and `[D-459]`: an accepted attempt ends the exchange in her log, so a genuinely
-    // later offer (a later session) is fresh; the session note keeps it as continued, so
-    // reopening in this session stays assisted. A stale or failed accept ends nothing.
-    if (result !== null && result.status === 'accepted') {
-      this.feedbackExposureLedger.settle(prompt.originInstrumentId);
-    }
-    // `[D-217]`: whatever level comes back (or doesn't) is what
-    // `renderAcceptedPhase` renders the depth heading from — see this file's
-    // module doc and the deps field's own doc for why `void`/`undefined`
-    // here means "no heading", never a fabricated one.
-    let soloLevel: SoloLevel | null = null;
-    // `ol-egov.141.89.6.15`: the depth write is gated on the SAME
-    // `result` the correctness accept just produced, never run
-    // unconditionally whenever `recordSoloGradeAndReview` happens to be
-    // wired. `result === null` or `result.status === 'stale'` both mean
-    // `acceptWithObservation` (`grading/wiring.ts`'s own `ol-0r92.89`
-    // doc, "REJECTS ON A STALE SOURCE, NEVER ACCEPTS SILENTLY") recorded
-    // nothing at all for the correctness half of this accept — a stale
-    // accept must write no review event of any kind, correctness or
-    // depth-only, so the depth write is skipped on exactly the same
-    // condition rather than running unconditionally and leaving a
-    // depth-only event as the sole trace of a source that had already
-    // changed underneath her.
-    //
-    // `[D-286]` (`ol-egov.141.89.6.4`'s gap table — a discovered gap, not
-    // this ruling's original wiring): "a clearly incorrect answer makes
-    // exactly one call and a partial makes two" — this method used to read
-    // no verdict at all before deciding whether to run the depth pass,
-    // so an accepted-but-incorrect attempt still made the second call.
-    // `grading.outcome === 'graded'` is always true here in production
-    // (the only path into `acceptGrading`/`computeAcceptGrading` is
-    // `renderGradedPhase`'s Accept button, never reached for the
-    // `'unable-to-assess'` branch — see `renderGradedPhase`'s own early
-    // return above); still checked explicitly, never asserted past the
-    // type, so a future caller of this method cannot silently skip it.
-    // `./request.ts`'s pure `shouldRunExplainBackDepthPass` carries the
-    // rule itself, unit-tested there for both branches.
-    //
-    // `ol-ryrh` (`[D-303]`, `[D-320]`): the depth gate no longer decides
-    // whether `recordSoloGradeAndReview` is called — only whether it runs
-    // the depth pass (`depthPass`). The correctness verdict she accepted is
-    // recorded on the one event either way; a skipped depth pass still makes
-    // no second Worker call (`solo-review.ts` never calls `gradeSoloAttempt`
-    // for `'skipped'`), so `[D-286]`'s one-call rule is unchanged.
-    const grading = pending.grading;
-    if (
-      result !== null &&
-      result.status === 'accepted' &&
-      this.deps.recordSoloGradeAndReview &&
-      grading.outcome === 'graded'
-    ) {
-      const depthPass = shouldRunExplainBackDepthPass(grading.verdict) ? 'run' : 'skipped';
-      // `ol-l7ew` [DOS-C5a]: resolved from what this view rendered for this
-      // attempt — see `EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN` above — and,
-      // `[D-416]`, `'guided'` for an answer given after she read an earlier
-      // attempt's graded result. Sealed at `submitAnswer`, never re-read here.
-      const supportLevelShown = support.supportLevelShown;
-      try {
-        // `[D-483]`: taken from the request this prompt context became, inside the isolation
-        // below so a digest failure can never block the accept she is looking at.
-        const gradingProvenance = await buildExplainBackGradingProvenance(prompt.context);
-        const depthOutcome = await this.deps.recordSoloGradeAndReview({
-          instrumentId: prompt.originInstrumentId,
-          attemptId,
-          subjectConceptId: prompt.subjectConceptId,
-          context: prompt.context,
-          answer,
-          durationMs,
-          // `ol-l7ew` [DOS-C5a]: resolved from what this view rendered for
-          // THIS attempt, on the same call and the same `attemptId` the
-          // depth grade and the correctness verdict already travel on, so
-          // the fold can never read an assistance fact from one attempt
-          // against a demonstration from another.
-          // Spread conditionally rather than passed as a possibly-`undefined`
-          // value: under `exactOptionalPropertyTypes`, an absent key and a key
-          // set to `undefined` are different things, and "absent" is the one
-          // that means unknown all the way down to the persisted record.
-          ...(supportLevelShown !== undefined ? { supportLevelShown } : {}),
-          // `ol-0r92.56` (`[D-228 / SIG-3]`): sealed at `submitAnswer`, the
-          // same "computed once, carried through" posture `durationMs` takes
-          // — always sent, never conditionally spread, because this field is
-          // always computable for a genuine submit through this view (see
-          // `ModalAnswerEdits`'s own doc).
-          answerEdits,
-          // `ol-egov.141.89.6.50`: `resolveGradingSourceBlocks`'s material,
-          // carried on `prompt` since prompt-resolution time — spread
-          // conditionally (same posture `supportLevelShown` above takes)
-          // because it is genuinely absent for the free-form topic entry
-          // point (`prompt.subjectConceptId === null`), never a fabricated
-          // `undefined` key under `exactOptionalPropertyTypes`.
-          ...(prompt.sourceMaterial !== undefined ? { sourceMaterial: prompt.sourceMaterial } : {}),
-          // Always a real boolean on `prompt` (never itself `undefined`) —
-          // always sent, same posture `answerEdits` takes.
-          relationExpected: prompt.relationExpected,
-          // `ol-egov.141.89.6.75` (F5.3a, C5.11): the resolved partner's concept KEY, never its
-          // wording — the write records the neighbour's demonstrated use as a scheduling
-          // observation only when it holds this. Spread conditionally (absent, never an explicit
-          // `undefined` key under `exactOptionalPropertyTypes`) because no partner resolved for
-          // most prompts and for the free-form topic entry point.
-          ...(prompt.neighbourConceptId !== undefined
-            ? { neighbourConceptId: prompt.neighbourConceptId }
-            : {}),
-          depthPass,
-          // `[D-416]`: the link to the attempt this answer followed, sealed at
-          // submit; absent for a first attempt, never a `null` key.
-          ...(support.followsAttemptId !== null
-            ? { followsAttemptId: support.followsAttemptId }
-            : {}),
-          gradingProvenance,
-        });
-        if (depthOutcome) soloLevel = depthOutcome;
-      } catch (error) {
-        // Mirrors `acceptWithObservation`'s own isolation
-        // (`grading/wiring.ts`'s `acceptExplainBackGradingWithObservation`
-        // doc): the SOLO depth grading and its review-log write are
-        // additional evidence, never a precondition for the correctness
-        // accept she is already looking at. D-005: a content-free line only.
-        console.error('Olea: SOLO grade/review-log write failed (grade acceptance unaffected)', {
-          error,
-        });
-      }
-    }
-    // `ol-0r92.89`: a `'stale'` result — the source this grading cited has
-    // changed since the request went out — is treated the same as `null`
-    // here: no encouragement banner, and (per `acceptWithObservation`'s own
-    // doc) nothing was recorded, never a silent accept dressed up as one.
-    // `[ol-egov.141.89.6.18]`: gated on `isFirstFullDepth` above —
-    // `explainBackFullDepthEncouragement` is a correctness proxy only and
-    // has no way to know whether this is genuinely the first time; calling
-    // it unconditionally reprinted the milestone on a repeat full-depth
-    // explanation of an already-mastered concept.
-    const message =
-      result === null || result.status !== 'accepted'
-        ? null
-        : isFirstFullDepth
-          ? explainBackFullDepthEncouragement(result.accepted)
-          : null;
-    this.state = { phase: 'accepted', message, soloLevel };
-    this.render();
-  }
-
-  private discardGrading(
-    prompt: ResolvedPrompt,
-    answer: string,
-    pending: PendingExplainBackGrading,
     durationMs: number | null,
-    attemptId: string,
-    support: SealedAttemptSupport,
   ): void {
-    // `[D-416]`: Try again sets this attempt aside; it never erases it. The
-    // attempt joins the sequence with its own id, its verdict (ids and a
-    // three-value verdict only, D-005) and the fact that she did not accept
-    // it, BEFORE the pending grading goes through its discard boundary. The
-    // next answer she submits is then sealed as following it.
-    this.attemptSequence = appendSetAsideAttempt(this.attemptSequence, {
-      attemptId,
-      outcome:
-        pending.grading.outcome === 'graded'
-          ? { kind: 'graded', verdict: pending.grading.verdict }
-          : { kind: 'unable-to-assess' },
-      support,
-    });
-    // `[D-416]`: and into her log, as its own record, so the sequence
-    // survives the view. Best-effort and never awaited — see
-    // `recordSetAsideAttemptIfPossible`.
-    const setAside = this.attemptSequence[this.attemptSequence.length - 1];
-    if (setAside !== undefined) {
-      void this.recordSetAsideAttemptIfPossible(prompt, pending, setAside, durationMs);
-    }
-    discardExplainBackGrading(pending);
-    // `ol-yj0k`: a fresh presentation for a fresh attempt — she is looking at
-    // the question again, about to compose (or edit) another answer to it,
-    // so the clock for THIS attempt's `durationMs` restarts here rather than
-    // accumulating time already spent on the discarded one.
+    void this.recordPracticeExplanationIfPossible(prompt, answer, attemptId, durationMs);
+    this.writeUnwrittenFeedbackShown(attemptId);
+    this.close();
+  }
+
+  /**
+   * "Try again" (registry §39, F5.4): she leaves this answer and writes again
+   * with her text still in the field. Its practice explanation is written
+   * now, and the next answer is a separate attempt whose practice explanation
+   * names the passages shown after this one (`[D-614]`: "Try again" never
+   * erases exposure). The clock restarts for the next answer (`ol-yj0k`).
+   */
+  private tryAgain(
+    prompt: ResolvedPrompt,
+    answer: string,
+    attemptId: string,
+    durationMs: number | null,
+  ): void {
+    void this.recordPracticeExplanationIfPossible(prompt, answer, attemptId, durationMs);
+    this.writeUnwrittenFeedbackShown(attemptId);
+    this.attemptsLeftByTryAgain = [...this.attemptsLeftByTryAgain, attemptId];
     this.presentedAtMs = this.now().getTime();
-    this.firstEditAtMs = null;
     this.state = { phase: 'answering', prompt, answer };
     this.render();
   }
 
   /**
-   * `[D-416]`: writes the attempt `discardGrading` just set aside, through
-   * `deps.recordSetAsideAttempt`. Writes nothing when the dep is unwired or
-   * the prompt has no subject concept (`setAsideRecordInput` returns `null`,
-   * the same rule the accepted retry's review follows). The input is built
-   * BEFORE `discardExplainBackGrading` runs, while the pending grading and
-   * its stamp are still in hand. A failed write is caught and logged
-   * content-free (D-005), never thrown.
+   * D7.1, `[D-614]`: the practice explanation for one answer she is leaving,
+   * through `deps.recordPracticeExplanation`, once per attempt. The earlier
+   * attempts it names are the ones she left by "Try again" before this one,
+   * read before this one joins them.
+   *
+   * Writes nothing when the dep is unwired, or when the prompt names no
+   * concept (a free-form topic that matched none: D7.1's `conceptIds` must be
+   * non-empty, the same rule a non-attempt follows). A rejection is caught
+   * and logged content-free (D-005), never thrown: it accompanies leaving the
+   * answer, which completes either way. `{ written: false }` (her log already
+   * holds this attempt) needs nothing more.
    */
-  private async recordSetAsideAttemptIfPossible(
+  private async recordPracticeExplanationIfPossible(
     prompt: ResolvedPrompt,
-    pending: PendingExplainBackGrading,
-    attempt: ExplainBackAttemptSequence[number],
+    answer: string,
+    attemptId: string,
     durationMs: number | null,
   ): Promise<void> {
-    if (!this.deps.recordSetAsideAttempt) return;
-    const input = setAsideRecordInput({
-      instrumentId: prompt.originInstrumentId,
-      subjectConceptId: prompt.subjectConceptId,
-      attempt,
-      pending,
-      durationMs,
-      at: this.now(),
-    });
-    if (input === null) return;
+    const record = this.deps.recordPracticeExplanation;
+    if (!record || prompt.conceptIds.length === 0) return;
+    if (this.practiceRecorded.has(attemptId)) return;
+    this.practiceRecorded.add(attemptId);
+    const earlierAttemptIds = this.attemptsLeftByTryAgain.filter((id) => id !== attemptId);
+    const leftAt = this.now();
     try {
-      await this.deps.recordSetAsideAttempt(input);
+      await record(
+        await practiceExplanationInput({
+          instrumentId: prompt.originInstrumentId,
+          attemptId,
+          conceptIds: prompt.conceptIds,
+          promptShape: promptShapeOf(prompt),
+          durationMs,
+          answer,
+          leftAt,
+          earlierAttemptIds,
+          passageTexts: prompt.passages.map((entry) => entry.block.text),
+        }),
+      );
     } catch (error) {
-      console.error('Olea: set-aside attempt record failed (Try again unaffected)', { error });
+      console.error('Olea: practice explanation record failed (leaving the answer unaffected)', {
+        error,
+      });
     }
   }
 
   /**
    * `ol-0r92.104` [DOS-I9] (`[D-273]`, SKIP-1): the named skip action — the
-   * `'answering'` phase's OTHER button. Never calls `deps.grade` or anything
-   * downstream of it: no answer is sent, no verdict is produced, and there
-   * is no grade at all, which is exactly what makes this distinct from the
-   * empty-submit guard (`isBlankExplainBackAnswer`, `ol-0r92.98`) — that
-   * guard only stops a blank `deps.grade` call from firing; this is a
-   * second, independently-wired action that never reaches `deps.grade` in
-   * the first place, blank answer or not, and writes its own event kind
-   * where the guard writes nothing.
-   *
-   * Synchronous and immediate, like `discardGrading` above, never like
-   * `submitAnswer`'s async `'grading'` phase: there is no network round trip
-   * to wait on here, only a best-effort local write
-   * (`recordNonAttemptIfPossible`) that never blocks or fails this
-   * transition (see that method's own doc).
+   * `'answering'` phase's OTHER button. Shows nothing and sends nothing: no
+   * passage, no reflection prompt, so a skip is never a way to read the
+   * passages without explaining first (F5.2). Synchronous; the non-attempt
+   * write is best-effort and never blocks this transition.
    */
   private skipPrompt(prompt: ResolvedPrompt): void {
     void this.recordNonAttemptIfPossible(prompt);
@@ -1733,21 +964,17 @@ export class ExplainBackModal extends Modal {
   /**
    * `ol-0r92.104` [DOS-I9] (D7.1, `[D-304]`, `[D-306]`): the one place both
    * `skipPrompt` and `onClose`'s `'answering'` guard write a non-attempt
-   * event through — never called anywhere else in this file, and in
-   * particular never from `submitAnswer`/`acceptGrading`'s paths, so an
-   * answer that reached `deps.grade` (flagged by some future local check or
-   * not) can never also be written as this kind (`[D-304]`).
+   * event through — never called for an answer she submitted (`[D-304]`).
    *
-   * Writes nothing, silently, when `deps.recordNonAttempt` is unwired (see
-   * that field's own doc) or when `prompt.conceptIds` is empty
-   * (`canRecordNonAttempt`, `./skip.ts`) — a free-form topic prompt has no
-   * concept to name the record against, and D7.1's schema requires one. A
-   * failed write is caught and logged content-free (D-005), never thrown:
-   * this accompanies a UI transition (closing the prompt, or closing the
-   * whole modal) that must complete either way.
+   * Writes nothing, silently, when `deps.recordNonAttempt` is unwired or when
+   * `prompt.conceptIds` is empty (`canRecordNonAttempt`, `./skip.ts`). A
+   * failed write is caught and logged content-free (D-005), never thrown.
    */
   private async recordNonAttemptIfPossible(prompt: ResolvedPrompt): Promise<void> {
     if (!this.deps.recordNonAttempt || !canRecordNonAttempt(prompt.conceptIds)) return;
+    // F5.7, D7.1: once she has left an answer by "Try again", this prompt produced an
+    // explanation, so leaving the next answer box unanswered is not a non-attempt of it.
+    if (this.attemptsLeftByTryAgain.length > 0) return;
     try {
       await this.deps.recordNonAttempt({
         conceptIds: prompt.conceptIds,
@@ -1768,32 +995,28 @@ export class ExplainBackModal extends Modal {
         this.renderTopicPhase(root, this.state.topic);
         return;
       case 'loading':
-        root.createDiv({ cls: 'olea-explain-back-loading', text: EXPLAIN_BACK_GRADING_LABEL });
+        // No words: the wait line registry §39 retired promised a check that no longer runs,
+        // and no loading line is ruled. The region keeps its place while the lookup runs.
+        root.createDiv({ cls: 'olea-explain-back-loading' });
         return;
       case 'answering':
         this.renderAnsweringPhase(root, this.state.prompt, this.state.answer);
         return;
-      case 'grading':
+      case 'revealing':
         this.renderQuestion(root, this.state.prompt);
-        root.createDiv({ cls: 'olea-explain-back-loading', text: EXPLAIN_BACK_GRADING_LABEL });
+        this.renderExplanation(root, this.state.answer);
         return;
-      case 'graded':
-        this.renderGradedPhase(
+      case 'passages':
+        this.renderPassagesPhase(
           root,
           this.state.prompt,
           this.state.answer,
-          this.state.pending,
-          this.state.durationMs,
           this.state.attemptId,
-          this.state.answerEdits,
-          this.state.support,
+          this.state.durationMs,
         );
         return;
       case 'refused':
-        this.renderRefusedPhase(root, this.state.prompt, this.state.answer, this.state.reason);
-        return;
-      case 'accepted':
-        this.renderAcceptedPhase(root, this.state.message, this.state.soloLevel);
+        this.renderRefusedPhase(root, this.state.prompt);
         return;
       case 'skipped':
         this.renderSkippedPhase(root);
@@ -1805,12 +1028,8 @@ export class ExplainBackModal extends Modal {
     root.createEl('p', { text: EXPLAIN_BACK_TOPIC_PROMPT });
     const input = root.createEl('input', { type: 'text', cls: 'olea-explain-back-topic' });
     input.value = topic;
-    // `[STY-9]` (`ol-l5og.18.19`, fix-list item 1): the kit's primary-action fill
-    // (`docs/design/pass3-explainback-sprig/ui_kits/olea-plugin/ExplainBack.jsx`'s "Done
-    // explaining"), same class the answering phase's submit button below takes — see
-    // `.olea-explain-back-primary`'s own doc in `styles.css` for what is and is not built here
-    // (no keycap, no mic: both need real functionality this bead does not add — see that rule's
-    // comment).
+    // `[STY-9]` (`ol-l5og.18.19`, fix-list item 1): the kit's primary-action fill, same class the
+    // answering phase's submit button below takes.
     const button = root.createEl('button', {
       cls: 'olea-explain-back-primary',
       text: EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
@@ -1822,6 +1041,11 @@ export class ExplainBackModal extends Modal {
     });
   }
 
+  /**
+   * The question, and registry §39's notice on every prompt (`[D-611]`):
+   * every phase that shows a question shows the notice beneath it, whatever
+   * the prompt's shape and whichever ruled entry point opened it (F5.1).
+   */
   private renderQuestion(root: HTMLElement, prompt: ResolvedPrompt): void {
     this.renderIdentityStrip(root, prompt);
     const header = root.createDiv({ cls: 'olea-explain-back-header' });
@@ -1830,18 +1054,15 @@ export class ExplainBackModal extends Modal {
       text: EXPLAIN_BACK_QUESTION_LABEL,
     });
     this.renderMasteryTag(header, prompt.subjectConceptId);
-    root.createDiv({ cls: 'olea-explain-back-question', text: prompt.context.question });
-    this.renderPracticeOnlyNotice(root, prompt);
+    root.createDiv({ cls: 'olea-explain-back-question', text: prompt.question });
+    // No `cls`: a bare element, the same posture `[D-322]`'s placeholder notice it replaces took.
+    root.createDiv({ text: EXPLAIN_BACK_PRACTICE_NOTICE });
   }
 
   /**
    * `[STY-9]` (fix-list item 2): the course/note identity line the kit's `Head` places above the
-   * prompt (`ExplainBack.jsx`'s `COURSE` line) — same course/note-title pair and visual pattern
-   * `review/view.ts`'s own `meta` method already renders for the review queue (`.olea-review-meta`
-   * in `styles.css`), reused here as a local, section-scoped equivalent rather than a second
-   * invented shape. Renders nothing for a free-form topic entry (`prompt.courseCode === null` —
-   * see `ResolvedPrompt.courseCode`'s own doc: there is genuinely no course to report, never a
-   * fabricated one).
+   * prompt — same course/note-title pair `review/view.ts`'s own `meta` renders. Renders nothing
+   * for a free-form topic entry (`prompt.courseCode === null`).
    */
   private renderIdentityStrip(root: HTMLElement, prompt: ResolvedPrompt): void {
     if (prompt.courseCode === null) return;
@@ -1853,27 +1074,12 @@ export class ExplainBackModal extends Modal {
   }
 
   /**
-   * `[D-322]` (vocabulary registry §19): the upfront designation the ruling requires when a
-   * freeform topic's concept match is ambiguous or absent — shown BEFORE she answers (this method
-   * is called from `renderQuestion`, which every phase's render calls first), never only after she
-   * has already written something. No `cls` — same "not owned by `styles.css`, a bare unstyled
-   * element is exactly what this bead's other new affordance (the skip button) already renders as"
-   * posture `renderAnsweringPhase`'s own skip-button comment states, so this stays out of the
-   * drift guard's reach without a second bead touching `styles.css`.
-   */
-  private renderPracticeOnlyNotice(root: HTMLElement, prompt: ResolvedPrompt): void {
-    if (!prompt.practiceOnly) return;
-    root.createDiv({ text: EXPLAIN_BACK_PRACTICE_ONLY_NOTICE });
-  }
-
-  /**
    * `[STY-0d]`: the sprig-plus-word tag the kit places on every explain-back
-   * screen — same shape as `gap/view.ts`'s `.olea-gap-mastery`
-   * (`renderSprig` for the mark, a plain text span for the word), reused
-   * rather than reinvented. Renders nothing for a free-form, topic-seeded
-   * attempt (`subjectConceptId === null` — there is no concept to show
-   * evidence for) and nothing until `deps.getMasteryState` is actually wired
-   * (see that field's own doc) — an absent tag, never a fabricated stage.
+   * screen — same shape as `gap/view.ts`'s `.olea-gap-mastery`. Renders
+   * nothing for a free-form, unmatched topic (`subjectConceptId === null`)
+   * and nothing until `deps.getMasteryState` answers — never a fabricated
+   * stage. It reads her concept's existing stage; nothing on this view moves
+   * it (F5.5).
    */
   private renderMasteryTag(parent: HTMLElement, subjectConceptId: string | null): void {
     if (subjectConceptId === null) return;
@@ -1884,6 +1090,12 @@ export class ExplainBackModal extends Modal {
     tag.createSpan({ text: state });
   }
 
+  /**
+   * The answering phase: the question, a textarea and two buttons. **Nothing
+   * open beside her while she writes** — no passage, no hint — so a first
+   * answer is written unaided, and the passages appear only after she
+   * submits (F5.2, F5.4).
+   */
   private renderAnsweringPhase(root: HTMLElement, prompt: ResolvedPrompt, answer: string): void {
     this.renderQuestion(root, prompt);
     const textarea = root.createEl('textarea', {
@@ -1891,361 +1103,85 @@ export class ExplainBackModal extends Modal {
       attr: { placeholder: EXPLAIN_BACK_ANSWER_PLACEHOLDER },
     });
     textarea.value = answer;
-    // `ol-0r92.56` (`[D-228 / SIG-3]`): the ONE capture listener this bead
-    // adds. Never reads or persists `textarea.value` here — this listener
-    // only counts and times, it does not hold or diff the answer text
-    // (D-005: no intermediate draft, no per-key stream). Nothing here
-    // renders anywhere (the no-live-display rule): `firstEditAtMs` and
-    // `editBursts` are written to instance fields only, never to the DOM.
-    // `burstStarted` is scoped to THIS call — a fresh `false` every time
-    // `renderAnsweringPhase` runs — so a later render's own first `'input'`
-    // can register its own burst without touching this closure; the running
-    // total lives on `this.editBursts`, never on the textarea, which is why
-    // it survives the re-render this method's own re-invocation is. See
-    // `this.firstEditAtMs`'s and `this.editBursts`'s own docs for exactly
-    // what each half of `answerEdits` measures.
-    let burstStarted = false;
-    textarea.addEventListener('input', () => {
-      if (this.firstEditAtMs === null) this.firstEditAtMs = this.now().getTime();
-      if (!burstStarted) {
-        burstStarted = true;
-        this.editBursts += 1;
-      }
-    });
-    // `[STY-9]` (fix-list item 1): same primary class `renderTopicPhase`'s Continue button takes
-    // — see `.olea-explain-back-primary`'s own doc in `styles.css`.
+    // `[STY-9]` (fix-list item 1): same primary class `renderTopicPhase`'s Continue button takes.
     const button = root.createEl('button', {
       cls: 'olea-explain-back-primary',
       text: EXPLAIN_BACK_SUBMIT_LABEL,
     });
     button.addEventListener('click', () => {
       // `ol-0r92.98`: mirrors `renderTopicPhase`'s own guard above — an empty
-      // or whitespace-only answer is a no-op, not a graded attempt. This is
-      // deliberately NOT the explicit "skip" action (`[DOS-I9]`, SKIP-2/3/4):
-      // it only stops an accidental empty submit from reaching `deps.grade`,
-      // it does not add a new named skip event or persist anything.
+      // or whitespace-only answer is a no-op: no passages, no marker, no
+      // practice explanation, so an empty submit is never a way to read the
+      // passages without explaining first (F5.2). Deliberately NOT the
+      // explicit "skip" action (`[DOS-I9]`, SKIP-2/3/4): it writes nothing.
       if (isBlankExplainBackAnswer(textarea.value)) return;
       void this.submitAnswer(prompt, textarea.value);
     });
     // `ol-0r92.104` [DOS-I9]: the named skip action — a second, independent
-    // button, never the same click handler as the guard above. See
-    // `skipPrompt`'s own doc for exactly how this differs from the
-    // empty-submit guard just above it. No `cls` here — `[STY-9]` styles the
-    // PRIMARY action only (the kit's own ghost "Skip for now" is secondary,
-    // unfilled); this bead does not add a `.olea-explain-back-secondary` or
-    // similar (out of scope: the kit draws it as a top-corner ghost action,
-    // not an inline pill, and no clause requires matching that placement) —
-    // a bare, unstyled Obsidian button is exactly what it rendered before
-    // this bead, and `Done` below still renders the same way.
+    // button, never the same click handler as the guard above. No `cls`: the
+    // kit's ghost "Skip for now" is secondary and unfilled.
     const skip = root.createEl('button', { text: EXPLAIN_BACK_SKIP_LABEL });
     skip.addEventListener('click', () => this.skipPrompt(prompt));
   }
 
-  private renderGradedPhase(
+  /** Her explanation as she wrote it, one paragraph per line, read-only. */
+  private renderExplanation(root: HTMLElement, answer: string): void {
+    const explanation = root.createDiv({ cls: 'olea-explain-back-item-text' });
+    for (const line of answer.split('\n')) explanation.createEl('p', { text: line });
+  }
+
+  /**
+   * After an answer (F5.2, F5.4 as amended; registry §39): her explanation,
+   * then under "From your notes" the passages the prompt carries, each with
+   * its note's label, then the reflection prompts for the prompt's shape —
+   * text only, with no answer field — and the end controls "Done" and "Try
+   * again". Nothing here grades, ranks or describes her explanation: no
+   * depth heading, no omission, error or confusion region, no misconception
+   * region, no follow-up question, no first-full-depth sentence, and no
+   * "See in registry" (it followed cited findings, and there are none, F5.3).
+   *
+   * With no passages (a lookup that found none for an instrument's
+   * question), the same view renders with an empty list, as the prompt is
+   * offered today; no line is added for it.
+   */
+  private renderPassagesPhase(
     root: HTMLElement,
     prompt: ResolvedPrompt,
     answer: string,
-    pending: PendingExplainBackGrading,
-    durationMs: number | null,
     attemptId: string,
-    answerEdits: ModalAnswerEdits,
-    support: SealedAttemptSupport,
+    durationMs: number | null,
   ): void {
     this.renderQuestion(root, prompt);
-    const grading = pending.grading;
-
-    // `[D-321]` / `ol-0r92.130`: pass one could not tell whether this was a
-    // genuine attempt at all — a defined non-verdict (`GroundedGrading`'s
-    // `outcome: 'unable-to-assess'` branch), never a wrong-answer grade.
-    // Handled BEFORE any of the graded-only fields below are touched: TS
-    // itself would refuse a read of `grading.feedback`/`.missedPoints`/etc.
-    // here without this narrowing, since `grading` is `GroundedGrading` (a
-    // union) — this early return is what the type forces, not an optional
-    // style choice.
-    if (grading.outcome === 'unable-to-assess') {
-      this.renderUnableToAssessPhase(root, prompt, answer, pending, durationMs, attemptId, support);
-      return;
-    }
-
-    // `[D-217]`: no heading here. The correctness verdict this phase used to
-    // print as a heading ("This holds up." etc.) is rejected wording — the
-    // registry vocabulary the ruling replaces it with is the five-level SOLO
-    // depth phrase, and that depth is not known yet at this point in the
-    // exchange (it grades later, best-effort, inside `acceptGrading`). This
-    // phase shows the fact-based detail below with no heading at all rather
-    // than a verdict-shaped placeholder — see `explainBackDepthHeading`'s own
-    // doc (`./copy.ts`) and `renderAcceptedPhase` below, where the heading
-    // renders once a depth level actually comes back.
-    //
-    // `ol-egov.141.89.6.98` (David, 2026-10-20): no separate feedback
-    // paragraph. The findings and misconception regions below ARE the
-    // feedback; the Worker's free-text `grading.feedback` still arrives (the
-    // `[D-318]` experiment seam) but is never shown to her here.
-
-    this.renderGradedRegions(root, prompt, grading);
-
-    if (grading.misconceptionCandidates.length > 0) {
-      root.createDiv({
-        cls: 'olea-explain-back-heading',
-        text: EXPLAIN_BACK_MISCONCEPTION_HEADING,
-      });
-      const lookup = sourceBlockPathLookup(prompt.sourceBlocks);
-      const list = root.createDiv({ cls: 'olea-explain-back-region-items' });
-      for (const candidate of grading.misconceptionCandidates) {
-        const row = list.createDiv({ cls: 'olea-explain-back-item' });
-        row.createDiv({ cls: 'olea-explain-back-item-text', text: candidate.correction });
-        const citation = citationLabelFor(candidate.correctionSourceBlockIds, lookup);
-        if (citation !== null) row.createDiv({ cls: 'olea-explain-back-cite', text: citation });
-      }
-    }
-
-    const actions = root.createDiv({ cls: 'olea-explain-back-actions' });
-    const accept = actions.createEl('button', { text: EXPLAIN_BACK_ACCEPT_LABEL });
-    accept.addEventListener(
-      'click',
-      () =>
-        void this.acceptGrading(
-          prompt,
-          answer,
-          pending,
-          durationMs,
-          attemptId,
-          answerEdits,
-          support,
-        ),
-    );
-    const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
-    discard.addEventListener('click', () =>
-      this.discardGrading(prompt, answer, pending, durationMs, attemptId, support),
-    );
-  }
-
-  /**
-   * `[D-321]` / `ol-0r92.130`: the unable-to-assess outcome's own render —
-   * reached only from `renderGradedPhase`'s early return above, on
-   * `pending.grading.outcome === 'unable-to-assess'`.
-   *
-   * **No grade shown, ever.** No feedback sentence, no missed-points/cited-
-   * issues region, no misconception heading, and — the acceptance
-   * criterion's own words — never a verdict badge: this phase never had one
-   * even for a graded outcome (`[D-217]` removed it), and there is
-   * additionally nothing here that could be dressed up as one.
-   *
-   * **No Accept button — the ONE action is `EXPLAIN_BACK_DISCARD_LABEL`
-   * ("Try again"), the SAME action and the SAME `discardGrading` call the
-   * graded phase's Discard button uses.** This is what makes the outcome
-   * "recoverable... for the session" (D-321's close evidence) without
-   * inventing a second control or a new phase: `discardExplainBackGrading`
-   * (`olea-core`) returns `null` unconditionally, for either outcome, so
-   * nothing is written to her log by taking it, and she is returned to a
-   * fresh `'answering'` phase for another attempt at THIS question.
-   * `[D-416]`: the attempt still joins the view's attempt sequence, with no
-   * verdict, and, having shown her no graded result, it does not by itself
-   * make the next answer guided (`./attempt-sequence.ts`).
-   *
-   * **Structurally, nothing downstream ever runs**: `acceptGrading` /
-   * `computeAcceptGrading` — the one path to
-   * `deps.acceptWithObservation`/`acceptExplainBackGrading`, and therefore
-   * to the misconception observation and mastery/review-log write chain —
-   * is wired ONLY to the Accept button `renderGradedPhase`'s graded branch
-   * creates. This method creates no such button, so that whole chain is
-   * simply unreachable from here — not merely uncalled by convention. Even
-   * if it somehow were reached, `acceptExplainBackGrading` (`gradingPipeline
-   * .ts`) itself refuses an unable-to-assess `pending.grading` by throwing,
-   * as a second, defensive layer.
-   *
-   * **Nothing is written to her log**: no `appendReviewLogRecord` call, no
-   * new event kind — `[D-321]` decision 4's own ruling (option (a)) — is
-   * introduced anywhere on this path.
-   *
-   * **Grader uncertainty alone never refers the instrument to validation**:
-   * this method reads no referral flag off `pending` (the wire shape
-   * carries none — see `gradingPipeline.ts`'s
-   * `ExplainBackGradingWireUnableToAssess` doc) and calls no validation-
-   * referral affordance; there is none on this surface to call.
-   *
-   * `EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE` is placeholder copy — see that
-   * export's own doc (`./copy.ts`) for why, and this bead's report for the
-   * full list of strings it adds.
-   */
-  private renderUnableToAssessPhase(
-    root: HTMLElement,
-    prompt: ResolvedPrompt,
-    answer: string,
-    pending: PendingExplainBackGrading,
-    durationMs: number | null,
-    attemptId: string,
-    support: SealedAttemptSupport,
-  ): void {
-    root.createEl('p', {
-      cls: 'olea-explain-back-feedback',
-      text: declineMessageFor(
-        declineKindOf(
-          pending.grading.outcome === 'unable-to-assess' ? pending.grading.reason : undefined,
-        ),
-      ),
-    });
-    const actions = root.createDiv({ cls: 'olea-explain-back-actions' });
-    const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
-    discard.addEventListener('click', () =>
-      this.discardGrading(prompt, answer, pending, durationMs, attemptId, support),
-    );
-  }
-
-  /**
-   * `[STY-0d]` (`ol-l5og.18.4`): the graded phase's three edge-differentiated
-   * regions — covered / omission / confusion — `docs/design/pass3-
-   * explainback-sprig`'s `ExplainBack.jsx` `Region` component, told apart by
-   * left-edge style and heading colour rather than a red-to-green scale (no
-   * third hue for "partly right" — `styles.css`'s own Pass-3 header repeats
-   * this). **`covered` never renders today**: `GroundedGrading` (`olea-
-   * core`) carries no positive-evidence field — `verdict`/`feedback` are the
-   * only holistic signals, and there is no per-point "what she got right"
-   * list anywhere in the grading pipeline. Rendering it from nothing would
-   * be exactly the fabrication INV-5 exists to forbid, so this method omits
-   * the region entirely rather than drawing an empty box or inventing
-   * content — `.olea-explain-back-region-covered`'s CSS rule stays in
-   * `styles.css`, ready for the day `gradingPipeline.ts` grows that field,
-   * same "disclosed deferral" posture as `render-sprig.ts`'s own wilt
-   * overlay. Filed as a discovered-from gap, not silently absorbed here
-   * (this bead's `owns` is this file, `copy.ts` and `styles.css` — not
-   * `packages/core`).
-   *
-   * `omission` combines two sources that were previously rendered as two
-   * separate flat lists under two different headings: `missedPoints`
-   * (uncited — E2a's own gate, never grounded to a block) and any
-   * `citedIssues` entry the grader classified `kind: 'omission'` (grounded,
-   * so it carries a citation chip the uncited ones cannot). Both describe
-   * the same thing — something her notes have that her explanation did not
-   * — so `EXPLAIN_BACK_MISSED_HEADING`'s existing, voice-charter-reviewed
-   * wording covers both without a new string. `confusion` is every
-   * `citedIssues` entry classified `'error'` or `'confusion'` — where her
-   * explanation actively conflicts with a cited passage — reusing
-   * `EXPLAIN_BACK_CITED_HEADING` for the same reason. `[D-171]`'s shared
-   * "See in registry" control still fires once, for the whole `citedIssues`
-   * list regardless of which region an entry landed in — every entry is
-   * grounded in the same `prompt.originInstrumentId` either way.
-   */
-  private renderGradedRegions(
-    root: HTMLElement,
-    prompt: ResolvedPrompt,
-    // Narrowed to the graded branch — `olea-core` exports `GroundedGrading`
-    // as the union (see the module header's `ol-0r92.130` note); this method
-    // is only ever called from `renderGradedPhase`'s graded branch (after its
-    // `outcome === 'unable-to-assess'` early return), so `Extract` names
-    // that narrowed shape without needing a new named export from
-    // `packages/core/src/index.ts` (outside this bead's `owns`) for a type
-    // this file alone needs to spell out.
-    grading: Extract<GroundedGrading, { outcome: 'graded' }>,
-  ): void {
-    const lookup = sourceBlockPathLookup(prompt.sourceBlocks);
-    const omissionItems: ExplainBackRegionItem[] = [
-      ...grading.missedPoints.map((text) => ({ text, citation: null })),
-      ...citedIssuesOfKind(grading.citedIssues, 'omission').map((issue) => ({
-        text: issue.description,
-        citation: citationLabelFor(issue.sourceBlockIds, lookup),
-      })),
-    ];
-    const confusionItems: ExplainBackRegionItem[] = [
-      ...citedIssuesOfKind(grading.citedIssues, 'error'),
-      ...citedIssuesOfKind(grading.citedIssues, 'confusion'),
-    ].map((issue) => ({
-      text: issue.description,
-      citation: citationLabelFor(issue.sourceBlockIds, lookup),
-    }));
-
-    if (omissionItems.length > 0) {
-      this.renderRegion(root, 'omission', EXPLAIN_BACK_MISSED_HEADING, omissionItems);
-    }
-    if (confusionItems.length > 0) {
-      this.renderRegion(root, 'confusion', EXPLAIN_BACK_CITED_HEADING, confusionItems);
-    }
-    if (grading.citedIssues.length > 0) {
-      // `[D-171]`'s one-step affordance (F8.4): ONE control for the whole
-      // cited-issues list, not one per issue or one per region — every
-      // cited issue in this attempt is grounded in the same originating
-      // instrument (`prompt.originInstrumentId`) — leading to that
-      // instrument's registry entry. Never a source path, heading or page
-      // printed here. `[D-175]`/F8.4b: that same registry entry now also
-      // carries this instrument's explain-back history, so this click
-      // target needed no change to also satisfy F8.4b's own one-step-
-      // affordance clause — see `./copy.ts`'s
-      // `EXPLAIN_BACK_REGISTRY_ENTRY_ACTION` doc.
-      const registryAction = root.createEl('button', {
-        cls: 'olea-explain-back-registry-action',
-        text: EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
-      });
-      registryAction.addEventListener('click', () => {
-        void openRegistryEntryFor(this.app, { instrumentId: prompt.originInstrumentId });
-      });
-    }
-  }
-
-  private renderRegion(
-    root: HTMLElement,
-    kind: ExplainBackRegionKind,
-    heading: string,
-    items: readonly ExplainBackRegionItem[],
-  ): void {
-    const region = root.createDiv({
-      cls: `olea-explain-back-region olea-explain-back-region-${kind}`,
-    });
-    region.createDiv({ cls: 'olea-explain-back-region-head', text: heading });
-    const list = region.createDiv({ cls: 'olea-explain-back-region-items' });
-    for (const item of items) {
+    this.renderExplanation(root, answer);
+    root.createDiv({ cls: 'olea-explain-back-heading', text: EXPLAIN_BACK_PASSAGES_HEADING });
+    const list = root.createDiv({ cls: 'olea-explain-back-region-items' });
+    for (const passage of prompt.passages) {
       const row = list.createDiv({ cls: 'olea-explain-back-item' });
-      row.createDiv({ cls: 'olea-explain-back-item-text', text: item.text });
-      if (item.citation !== null) {
-        row.createDiv({ cls: 'olea-explain-back-cite', text: item.citation });
-      }
+      row.createDiv({ cls: 'olea-explain-back-item-text', text: passage.block.text });
+      const label = passageSourceLabel(passage);
+      if (label !== null) row.createDiv({ cls: 'olea-explain-back-cite', text: label });
     }
+    for (const reflection of explainBackReflectionPrompts(prompt.shape)) {
+      root.createEl('p', { text: reflection });
+    }
+    const actions = root.createDiv({ cls: 'olea-explain-back-actions' });
+    const done = actions.createEl('button', { text: EXPLAIN_BACK_DONE_LABEL });
+    done.addEventListener('click', () =>
+      this.finishPractice(prompt, answer, attemptId, durationMs),
+    );
+    const tryAgain = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
+    tryAgain.addEventListener('click', () => this.tryAgain(prompt, answer, attemptId, durationMs));
   }
 
   /**
-   * [STY-0h] (`ol-l5og.18.8`): the two `[D-089]`/C4.7 refusal reasons
-   * ('insufficient-notes', 'check-failed') render as the two-cue-coded family
-   * `docs/design/pass5-refusal-trends-shell/ui_kits/olea-plugin/
-   * Pass5Refusal.jsx` (`olea-service`) draws — told apart by where the
-   * evidence goes (a found-list of what retrieval actually returned, or
-   * nothing at all), the edge (dashed absence vs. solid host wash) and the
-   * mark (a dashed rule vs. a retry glyph), never by a new colour.
-   *
-   * **`'unavailable'` is deliberately NOT drawn in either cue family.** It
-   * means no AI Worker is configured at all — F7.8's degradation posture
-   * (`AI_NOT_CONFIGURED_NOTICE`'s "honestly absent, not broken-looking"),
-   * not a check that ran and came back thin or a check that failed to run.
-   * Folding it into "couldn't check" would be the identical conflation C4.7
-   * forbids the other direction: a permanent, non-retryable absence wearing
-   * a transient refusal's clothes. It keeps the plain paragraph this surface
-   * always gave it, with no retry action, because retrying without a Worker
-   * fails the same way again.
+   * [STY-0h] (`ol-l5og.18.8`): the insufficient-notes refusal for a free-form
+   * topic whose lookup found nothing to explain against — dashed edge and,
+   * whenever retrieval returned anything at all, the found-list itself
+   * (C4.7's permitted content). Reached before any answer, as before
+   * `[D-603]`.
    */
-  private renderRefusedPhase(
-    root: HTMLElement,
-    prompt: ResolvedPrompt,
-    answer: string,
-    reason: 'unavailable' | 'check-failed' | 'insufficient-notes',
-  ): void {
+  private renderRefusedPhase(root: HTMLElement, prompt: ResolvedPrompt): void {
     this.renderQuestion(root, prompt);
-    if (reason === 'unavailable') {
-      root.createEl('p', { cls: 'olea-explain-back-refusal', text: EXPLAIN_WHY_UNAVAILABLE });
-      return;
-    }
-    if (reason === 'insufficient-notes') {
-      this.renderNothingMatchedRefusal(root, prompt);
-      return;
-    }
-    this.renderCouldNotCheckRefusal(root, prompt, answer);
-  }
-
-  /**
-   * `reason: 'insufficient-notes'` — the search ran; what it returned does
-   * not reach far enough to grade against. Dashed edge (this system's mark
-   * for absence since Pass 3) and, whenever retrieval returned anything at
-   * all, the found-list itself: C4.7's permitted content, exactly what was
-   * returned and nothing claimed about the vault beyond it.
-   */
-  private renderNothingMatchedRefusal(root: HTMLElement, prompt: ResolvedPrompt): void {
     const box = root.createDiv({
       cls: 'olea-explain-back-refusal-box olea-explain-back-refusal-box--absent',
     });
@@ -2257,17 +1193,15 @@ export class ExplainBackModal extends Modal {
     });
     box.createEl('p', {
       cls: 'olea-explain-back-refusal',
-      text: explainBackInsufficientNotesRefusal(prompt.sourceBlocks.length),
+      text: explainBackInsufficientNotesRefusal(prompt.passages.length),
     });
-    if (prompt.sourceBlocks.length > 0) this.renderFoundList(box, prompt.sourceBlocks);
+    if (prompt.passages.length > 0) this.renderFoundList(box, prompt.passages);
   }
 
   /**
-   * The found-list `renderNothingMatchedRefusal` shows when retrieval
-   * returned at least one block — read-only (the note path and the passage
-   * text itself, never a summary of it), same restraint the kit's own
-   * `FoundList` states: "checkable in one click" is the goal, opening the
-   * note itself is a follow-up this bead does not wire.
+   * The found-list `renderRefusedPhase` shows when retrieval returned at least
+   * one block — read-only (the note path and the passage text itself, never a
+   * summary of it).
    */
   private renderFoundList(parent: HTMLElement, blocks: readonly ExplainBackSourceBlock[]): void {
     const wrap = parent.createDiv({ cls: 'olea-explain-back-found-list' });
@@ -2284,121 +1218,27 @@ export class ExplainBackModal extends Modal {
   }
 
   /**
-   * `reason: 'check-failed'` — the check itself did not run, so nothing was
-   * decided either way. Solid edge on the host's own wash (established
-   * shapes, nothing drawn as found), a retry glyph rather than a dashed
-   * rule, and the one action a transient failure earns: try again, wired to
-   * the same `submitAnswer` the original attempt used, over the same
-   * `answer` so nothing she wrote is lost.
-   */
-  private renderCouldNotCheckRefusal(
-    root: HTMLElement,
-    prompt: ResolvedPrompt,
-    answer: string,
-  ): void {
-    const box = root.createDiv({
-      cls: 'olea-explain-back-refusal-box olea-explain-back-refusal-box--weather',
-    });
-    const eyebrow = box.createDiv({ cls: 'olea-explain-back-refusal-eyebrow' });
-    const mark = eyebrow.createSpan({ cls: 'olea-explain-back-refusal-eyebrow-mark' });
-    renderRetryGlyph(mark);
-    eyebrow.createSpan({
-      cls: 'olea-explain-back-refusal-eyebrow-text',
-      text: EXPLAIN_BACK_COULD_NOT_CHECK_EYEBROW,
-    });
-    box.createEl('p', {
-      cls: 'olea-explain-back-refusal',
-      text: EXPLAIN_BACK_CHECK_FAILED_REFUSAL,
-    });
-    const button = box.createEl('button', {
-      cls: 'olea-explain-back-refusal-retry',
-      text: EXPLAIN_BACK_SUBMIT_LABEL,
-    });
-    button.addEventListener('click', () => void this.submitAnswer(prompt, answer));
-  }
-
-  private renderAcceptedPhase(
-    root: HTMLElement,
-    message: string | null,
-    soloLevel: SoloLevel | null,
-  ): void {
-    // `[D-217]`: the depth heading renders here, once accepting has actually
-    // produced a level — never on the graded phase above, and never a
-    // placeholder when none came back (see this file's module doc and
-    // `deps.recordSoloGradeAndReview`'s own doc for why that is the common
-    // case in production today).
-    if (soloLevel !== null) {
-      root.createDiv({
-        cls: 'olea-explain-back-outcome',
-        text: explainBackDepthHeading(soloLevel),
-      });
-    }
-    if (message !== null)
-      root.createEl('p', { cls: 'olea-explain-back-encouragement', text: message });
-    this.renderDoneButton(root);
-  }
-
-  /**
-   * `ol-0r92.104` [DOS-I9] (`[D-305]`): a skip, or a prompt closed without
-   * answering, closes with no result line — not the five-step depth
-   * description (`renderAcceptedPhase` above), and no sixth phrase or
-   * sentence in its place. Nothing renders here above the Done button: no
-   * heading, no message, no mention that anything was skipped at all (F5.7:
-   * no surface shows her a count or a fact about her skips). The bare Done
-   * button is reused from `renderAcceptedPhase` via `renderDoneButton`
-   * rather than re-typed, which is the one thing the two phases share.
+   * `ol-0r92.104` [DOS-I9] (`[D-305]`): a skip closes with nothing said and
+   * nothing shown — no line about the prompt, no passage, no reflection
+   * prompt (F5.2, F5.7) — above the shared Done button.
    */
   private renderSkippedPhase(root: HTMLElement): void {
     this.renderDoneButton(root);
   }
 
   private renderDoneButton(root: HTMLElement): void {
-    const button = root.createEl('button', { text: 'Done' });
+    const button = root.createEl('button', { text: EXPLAIN_BACK_DONE_LABEL });
     button.addEventListener('click', () => this.close());
   }
 }
 
-/** `renderGradedRegions`' three edge styles — never a fourth, never a "partly right" hue (see that method's doc). `'covered'` has no live caller yet; kept so `styles.css`'s rule for it and this file's own doc stay pointed at the same name. */
-type ExplainBackRegionKind = 'covered' | 'omission' | 'confusion';
-
-interface ExplainBackRegionItem {
-  readonly text: string;
-  /** `null` for an uncited `missedPoints` entry — never a fabricated source. */
-  readonly citation: string | null;
-}
-
-function citedIssuesOfKind(
-  issues: readonly CitedIssue[],
-  kind: CitedIssue['kind'],
-): readonly CitedIssue[] {
-  return issues.filter((issue) => issue.kind === kind);
-}
-
-/** `blockId -> notePath`, built fresh per render from the SAME `ExplainBackSourceBlock[]` the request that produced this grading was built from — the only place this view can resolve a grounded `sourceBlockIds` entry back to something showable. */
-function sourceBlockPathLookup(
-  sourceBlocks: readonly ExplainBackSourceBlock[],
-): ReadonlyMap<string, string> {
-  return new Map(sourceBlocks.map((entry) => [entry.block.blockId, entry.path]));
-}
-
 /**
- * The first citable block among `sourceBlockIds` that this view actually
- * retrieved, formatted the same way the registry's own citation chips are
- * (`olea-core`'s `formatSourceCitation` — never a second, re-typed basename
- * routine). `null` when none resolve — grounding guarantees at least one id
- * in `sourceBlockIds` came from the caller's own `sourceBlocks`
- * (`gradingPipeline.ts`'s `groundCitations`), so this is a defensive
- * fallback, not the expected path.
+ * A passage's source label: `olea-core`'s `formatSourceCitation` for the note
+ * it came from — never a second, re-typed basename routine — and `null` when
+ * the note is unknown, never an invented source.
  */
-function citationLabelFor(
-  sourceBlockIds: readonly string[],
-  lookup: ReadonlyMap<string, string>,
-): string | null {
-  for (const id of sourceBlockIds) {
-    const sourcePath = lookup.get(id);
-    if (sourcePath !== undefined) return formatSourceCitation({ sourcePath });
-  }
-  return null;
+function passageSourceLabel(passage: ExplainBackSourceBlock): string | null {
+  return passage.path.trim() === '' ? null : formatSourceCitation({ sourcePath: passage.path });
 }
 
 function questionQuery(instrument: ReviewInstrument): string {

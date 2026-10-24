@@ -107,6 +107,7 @@ import { ensureDeviceId } from './device/device-id.js';
 import { createRecordFeedbackShown } from './explain-back/feedback-exposure.js';
 import { ExplainBackModal, type ExplainBackSeed } from './explain-back/modal.js';
 import { buildExplainBackObservationContext } from './explain-back/observation.js';
+import { createRecordPracticeExplanation } from './explain-back/practice-record.js';
 import {
   type ExplainBackRelationPartner,
   type ExplainBackSourceBlock,
@@ -211,6 +212,14 @@ import {
 } from './ingestion/processed-revisions/feed.js';
 import { ObsidianProcessedRevisionStore } from './ingestion/processed-revisions/store.js';
 import { ObsidianQueueStore } from './ingestion/queue-store.js';
+import {
+  applySlideCorrections,
+  landedTranscripts,
+  type SlidePassageReader,
+  slideCorrectionFinished,
+  slidePassageReader,
+  WorkerSlideCorrectionJudge,
+} from './ingestion/slide-correction.js';
 import {
   buildFirstReadFolderViews,
   buildIngestionRunner,
@@ -766,6 +775,12 @@ export default class OleaPlugin extends Plugin {
    * no Worker token needed for the free hash read.
    */
   private citationHashStore: ObsidianCitationHashStore | null = null;
+  /** `ol-zjke` ([D-625]): transcript versions the slide-correction route has finished this run of Olea. */
+  private readonly slideCorrectionVersions = new Set<string>();
+  /** `ol-zjke`: citation passes running now (`tickCitationRevisions`), for `writeCorrectionHolds`. */
+  private readonly citationPassesInFlight = new Set<Promise<void>>();
+  /** `ol-zjke`: the latest lecturer-correction hold writes, settled or not; a pass starts after them. */
+  private correctionHoldWrites: Promise<void> = Promise.resolve();
   /**
    * F6.9's processed-revision record (`[D-426]`, `ol-egov.141.89.11.27`) — a local `data.json`
    * projection holding, per file version, its fingerprint, the day it was first processed and
@@ -3448,12 +3463,89 @@ export default class OleaPlugin extends Plugin {
    * interval, same posture every tick in this file takes.
    */
   private async tickCitationRevisions(): Promise<void> {
-    if (this.citationRevision === null) return;
-    try {
+    const trigger = this.citationRevision;
+    if (trigger === null) return;
+    // `ol-zjke` ([D-625]): a pass never takes its snapshot of the store while a lecturer-correction
+    // hold is being written, and the hold writes wait for a pass already running
+    // (`writeCorrectionHolds`), so no pass can write a fact of its own over a hold it did not see.
+    const pass = this.correctionHoldWrites.then(async () => {
       const { vault, actions } = await this.citationRevisionActions();
-      await this.citationRevision.tick(vault, actions);
+      await trigger.tick(vault, actions);
+    });
+    this.citationPassesInFlight.add(pass);
+    try {
+      await pass;
     } catch (error) {
       console.error('Olea: citation-revision batch pass failed', error);
+    } finally {
+      this.citationPassesInFlight.delete(pass);
+    }
+  }
+
+  /**
+   * `ol-zjke` ([D-625]): runs the slide-correction route's hold writes after every citation pass
+   * already running has finished, and after any earlier hold writes; a pass that starts meanwhile
+   * waits for them (`tickCitationRevisions`). Never awaits a pass that started after it, so the two
+   * cannot wait on each other.
+   */
+  private writeCorrectionHolds(writes: () => Promise<void>): Promise<void> {
+    const running = [...this.citationPassesInFlight];
+    const run = this.correctionHoldWrites.then(async () => {
+      await Promise.allSettled(running);
+      await writes();
+    });
+    this.correctionHoldWrites = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * `ol-zjke` ([D-625], C5.3 "A correction of an answer basis"): the slide-correction route's
+   * production caller, for every supplied transcript among landed units — see
+   * `ingestion/slide-correction.ts`'s module doc. Runs once per transcript version per run of Olea;
+   * a version the route could not finish (the Worker not configured or offline, a failed call or
+   * read, an unwritten hold) is forgotten, so a later landing of the same version tries again. The
+   * judgement goes through the same Worker transport every other port uses; with none, the route
+   * greys out. Never throws.
+   */
+  private async applySlideCorrectionsTo(
+    units: readonly ExtractedUnit[],
+    sourceRevisions?: ReadonlyMap<string, string>,
+  ): Promise<void> {
+    const store = this.citationHashStore;
+    if (store === null) return;
+    for (const transcript of landedTranscripts(units, sourceRevisions)) {
+      const key = `${transcript.path}\u0000${transcript.version ?? ''}`;
+      if (this.slideCorrectionVersions.has(key)) continue;
+      this.slideCorrectionVersions.add(key);
+      try {
+        const transport = this.retrieval?.transport;
+        let slides: SlidePassageReader | undefined;
+        const report = await applySlideCorrections(
+          {
+            vault: this.vaultSource,
+            store,
+            judge: transport ? new WorkerSlideCorrectionJudge({ transport }) : null,
+            clock: { now: () => this.now().getTime() },
+            bundles: () =>
+              readLectureBundles(createObsidianResolvedLinksPort(this.app.metadataCache)),
+            // Read once per run, and only when a cue sentence has a linked deck to judge against.
+            slidePassage: (deckPath, page) => {
+              slides ??= slidePassageReader(this.keywordIndex?.engine.toPersisted());
+              return slides(deckPath, page);
+            },
+            isOnline: () => navigator.onLine,
+            exclusive: (writes) => this.writeCorrectionHolds(writes),
+          },
+          transcript,
+        );
+        if (!slideCorrectionFinished(report)) this.slideCorrectionVersions.delete(key);
+      } catch (error) {
+        this.slideCorrectionVersions.delete(key);
+        console.error(
+          'Olea: slide-correction route failed',
+          error instanceof Error ? error.name : 'unknown',
+        );
+      }
     }
   }
 
@@ -3757,6 +3849,10 @@ export default class OleaPlugin extends Plugin {
         console.error('Olea: citation-revision source rewrite on landed units failed', error);
       }
     }
+    // `ol-zjke` ([D-625]): a landed transcript's cue-flagged sentences are judged against the decks
+    // its lecture links, and the questions a clear correction affects are withheld. Not awaited, so
+    // the Worker's judgement never holds up the ingestion drain; it never throws.
+    void this.applySlideCorrectionsTo(units, sourceRevisions);
     if (this.generation === null) return;
     // `ol-egov.141.89.105.33`: a folder whose first read has not finished keeps its landed units, so
     // the sweep can run once more when the read has minted a concept the sweep could not see.
@@ -5127,6 +5223,20 @@ export default class OleaPlugin extends Plugin {
           ? {
               recordNonAttempt: (params: { conceptIds: readonly string[]; timestamp: string }) =>
                 this.recordExplainBackNonAttempt(nonAttemptTrigger, nonAttemptOfferEventId, params),
+            }
+          : {}),
+        // D7.1, `[D-614]` (`ol-egov.141.89.6.129`): the practice explanation the v0.9 view writes
+        // when she leaves an answer by "Done" or "Try again", under the same resolved trigger and
+        // offer reference a non-attempt carries (the view has no way to know either). Unwired, as
+        // `recordNonAttempt` is, when no trigger was resolved.
+        ...(nonAttemptTrigger !== undefined
+          ? {
+              recordPracticeExplanation: createRecordPracticeExplanation({
+                vault,
+                deviceId: () => ensureDeviceId(this),
+                trigger: nonAttemptTrigger,
+                offerEventId: nonAttemptOfferEventId,
+              }),
             }
           : {}),
         ...(onClosed ? { onClosed } : {}),

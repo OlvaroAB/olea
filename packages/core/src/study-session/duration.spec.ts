@@ -2,6 +2,9 @@
  * Scenarios: `features/F4-oracle.md`, "F4.6 / F4.7 / F4.8 — the session
  * builder", the three duration-model scenarios —
  * @auto:core/study-session/duration.spec
+ *
+ * And `features/F2-review.md`, "F2.14a / [D-614] — the explain-back duration
+ * estimate reads her practice explanations" (`ol-egov.141.89.6.128`).
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -52,6 +55,26 @@ function suspend(): ReviewLogEntry {
     timestamp: '2026-09-14T09:00:00.000+00:00',
     instrumentId: `i${seq}`,
     conceptIds: ['Alpha'],
+  };
+}
+
+/** One saved practice explanation (D7.1, `[D-614]`), optionally one the local check flagged. */
+function practice(durationMs: number | null, localCheckFlagged = false): ReviewLogEntry {
+  seq += 1;
+  return {
+    schemaVersion: 6,
+    kind: 'practice-explanation',
+    eventId: `p${seq}`,
+    timestamp: '2026-10-23T09:00:00.000+00:00',
+    instrumentId: `explain-back:${seq}`,
+    attemptId: `attempt-${seq}`,
+    conceptIds: ['Alpha'],
+    promptShape: 'concept',
+    trigger: 'on-demand',
+    durationMs,
+    supportLevelShown: 'independent',
+    contentRef: `device-a.content-${seq}`,
+    ...(localCheckFlagged ? { localCheckFlagged: true as const } : {}),
   };
 }
 
@@ -259,6 +282,74 @@ describe('estimateInstrumentDurations — accepted explain-back (F2.14a, `[D-126
     const model = estimateInstrumentDurations([]);
     expect(model.estimates.map((e) => e.instrumentType)).not.toContain('explain-back');
     expect(SESSION_INSTRUMENT_TYPES).not.toContain('explain-back');
+  });
+});
+
+describe('estimateInstrumentDurations — practice explanations in v0.9 (F2.14a, `[D-614]`)', () => {
+  it('the median reads the durations of her practice explanations, superseding the declared 90s exactly as the other medians supersede theirs', () => {
+    // No graded explain-back review exists in v0.9: the history is practice explanations only.
+    const history = [
+      practice(60_000),
+      practice(70_000),
+      practice(80_000),
+      practice(400_000), // one left open while she read: the median does not move for it
+      practice(75_000),
+    ];
+    expect(history.some((e) => e.kind === 'review')).toBe(false);
+    const model = estimateInstrumentDurations(history);
+    expect(model.sourceFor('explain-back')).toBe('measured');
+    expect(model.secondsFor('explain-back')).toBe(75);
+    expect(model.explainBack?.sampleCount).toBe(5);
+    // The candidate types are untouched: a practice explanation is an explain-back sample only.
+    for (const type of SESSION_INSTRUMENT_TYPES) {
+      expect(model.sourceFor(type)).toBe('assumed');
+      expect(model.secondsFor(type)).toBe(ASSUMED_INSTRUMENT_SECONDS[type]);
+    }
+    expect(model.totalSampleCount).toBe(0);
+  });
+
+  it('with too few of them the estimate is still the declared 90 seconds', () => {
+    const history = Array.from({ length: DEFAULT_MIN_MEASURED_REVIEWS - 1 }, () =>
+      practice(30_000),
+    );
+    const model = estimateInstrumentDurations(history);
+    expect(model.sourceFor('explain-back')).toBe('assumed');
+    expect(model.secondsFor('explain-back')).toBe(EXPLAIN_BACK_ASSUMED_SECONDS);
+    expect(model.explainBack?.sampleCount).toBe(DEFAULT_MIN_MEASURED_REVIEWS - 1);
+  });
+
+  it('an untimed practice explanation is ignored, not read as zero', () => {
+    const history = [...Array.from({ length: 5 }, () => practice(50_000)), practice(null)];
+    const model = estimateInstrumentDurations(history);
+    expect(model.explainBack?.sampleCount).toBe(5);
+    expect(model.secondsFor('explain-back')).toBe(50);
+  });
+
+  it('every saved answer is timed, a flagged one included: the flag decides study activity, not duration', () => {
+    const history = [
+      practice(40_000),
+      practice(50_000),
+      practice(60_000),
+      practice(70_000),
+      practice(5_000, true),
+    ];
+    const model = estimateInstrumentDurations(history);
+    expect(model.explainBack?.sampleCount).toBe(5);
+    expect(model.secondsFor('explain-back')).toBe(50);
+  });
+
+  it('a graded explain-back review written before v0.9 still counts beside them, by the same mechanism', () => {
+    const history = [
+      review('explain-back', 100_000),
+      review('explain-back', 100_000),
+      practice(100_000),
+      practice(100_000),
+      practice(100_000),
+    ];
+    const model = estimateInstrumentDurations(history);
+    expect(model.sourceFor('explain-back')).toBe('measured');
+    expect(model.explainBack?.sampleCount).toBe(5);
+    expect(model.secondsFor('explain-back')).toBe(100);
   });
 });
 

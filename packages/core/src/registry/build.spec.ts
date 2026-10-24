@@ -663,23 +663,18 @@ describe('buildRegistryModel — per-instrument explain-back history (F8.4b, [D-
     expect(row?.instruments).toHaveLength(1); // still exactly the one qa instrument — no second row invented
     expect(row?.instruments[0]?.explainBackHistory).toEqual([
       {
+        kind: 'graded',
         eventId: 'r-eb-1',
         timestamp: '2026-01-10T09:00:00-04:00',
-        soloLevel: 'relational',
         contested: false,
       },
     ]);
   });
 
-  it('never carries the student answer text, the grader feedback, or a raw scalar/percentage — only eventId, timestamp and the SOLO enum value', () => {
+  it('never carries the student answer text, the grader feedback, a SOLO level or a number — only the kind, eventId, timestamp and the contested flag', () => {
     const model = buildFor({ entries: [explainBackReview()] });
     const row = model.concepts[0]?.instruments[0]?.explainBackHistory[0];
-    expect(row && Object.keys(row).sort()).toEqual([
-      'contested',
-      'eventId',
-      'soloLevel',
-      'timestamp',
-    ]);
+    expect(row && Object.keys(row).sort()).toEqual(['contested', 'eventId', 'kind', 'timestamp']);
   });
 
   it('multiple attempts are oldest first, and the fold never treats a superseded attempt as current', () => {
@@ -699,7 +694,6 @@ describe('buildRegistryModel — per-instrument explain-back history (F8.4b, [D-
     });
     const history = model.concepts[0]?.instruments[0]?.explainBackHistory;
     expect(history?.map((row) => row.eventId)).toEqual(['r-eb-1', 'r-eb-2']);
-    expect(history?.map((row) => row.soloLevel)).toEqual(['unistructural', 'relational']);
   });
 
   it('no `disputes` supplied — every row reads not-contested, never a fabricated guess either way', () => {
@@ -789,6 +783,77 @@ describe('buildRegistryModel — per-instrument explain-back history (F8.4b, [D-
     const history = model.concepts[0]?.instruments[0]?.explainBackHistory;
     expect(history).toHaveLength(1); // still exactly one row for this one attempt
     expect(history?.[0]).toMatchObject({ eventId: 'r-eb-1', contested: false });
+  });
+
+  // `[D-603]`/`[D-614]` — F8.4b in v0.9 (`@auto:core/registry/build.spec`).
+  function practiceExplanation(
+    over: Partial<Extract<ReviewLogEntry, { kind: 'practice-explanation' }>> = {},
+  ): ReviewLogEntry {
+    return {
+      schemaVersion: 6,
+      kind: 'practice-explanation',
+      eventId: 'pe-1',
+      timestamp: '2026-01-12T09:00:00-04:00',
+      instrumentId: 'qa:concept-a:1',
+      attemptId: 'attempt-1',
+      conceptIds: ['concept-a'],
+      promptShape: 'concept',
+      trigger: 'on-demand',
+      durationMs: null,
+      contentRef: 'desktop.content-1',
+      ...over,
+    } as ReviewLogEntry;
+  }
+
+  it('lists every saved practice explanation by date beside a graded attempt, with no reading of any kind', () => {
+    const model = buildFor({
+      entries: [
+        practiceExplanation({
+          eventId: 'pe-2',
+          attemptId: 'attempt-2',
+          timestamp: '2026-01-20T09:00:00-04:00',
+          contentRef: 'desktop.content-2',
+        }),
+        explainBackReview(),
+        practiceExplanation(),
+      ],
+    });
+    const history = model.concepts[0]?.instruments[0]?.explainBackHistory;
+    expect(history?.map((row) => [row.kind, row.eventId])).toEqual([
+      ['graded', 'r-eb-1'],
+      ['practice', 'pe-1'],
+      ['practice', 'pe-2'],
+    ]);
+    for (const row of history ?? []) {
+      expect(Object.keys(row)).not.toContain('soloLevel');
+    }
+    expect(history?.[1]).toEqual({
+      kind: 'practice',
+      eventId: 'pe-1',
+      timestamp: '2026-01-12T09:00:00-04:00',
+      contested: false,
+      contentRef: 'desktop.content-1',
+    });
+  });
+
+  it('a practice row is never contested, even when a dispute marks the instrument', () => {
+    const dispute = contestClaim({
+      claim: {
+        rendering: 'explain-back-grade',
+        conceptIds: ['concept-a'],
+        instrumentId: 'qa:concept-a:1',
+        evidenceBasis: 'evidence-fingerprint-1',
+      },
+      timestamp: '2026-01-20T09:00:00-04:00',
+    });
+    const disputeRecord: DisputeLogRecord = {
+      schemaVersion: 6,
+      kind: 'dispute',
+      eventId: 'dispute-1',
+      ...dispute.record,
+    };
+    const model = buildFor({ entries: [practiceExplanation()], disputes: [disputeRecord] });
+    expect(model.concepts[0]?.instruments[0]?.explainBackHistory[0]?.contested).toBe(false);
   });
 
   it('a freeform/topic-seeded explain-back attempt (a synthetic instrument id, no vault instrument) never appears in any instrument row', () => {

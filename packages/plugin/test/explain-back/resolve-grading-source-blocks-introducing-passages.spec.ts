@@ -242,11 +242,17 @@ describe("the SOLO denominator effect (this bead's acceptance criteria): decided
     // own report cites the exact lines). If this call site ever stops
     // passing the widened `gradingSourceBlocks` through, this decision's
     // premise breaks and it needs re-deciding.
+    //
+    // `[D-603]` (`ol-egov.141.89.6.129`): in v0.9 nothing is graded, so neither denominator is
+    // built from the view; the premise this decision rests on is kept where the view still uses
+    // the lookup — the widened blocks, introducing passages included, are exactly the passages
+    // she is shown after answering (F5.2a's relation case), and the question is built over them.
     const start = modal.indexOf('private async resolveInstrumentPrompt(');
     const end = modal.indexOf('private async resolveTopicPrompt(');
     const b = modal.slice(start, end);
+    expect(b).toMatch(/passages: lookup\.sourceBlocks,/);
     expect(b).toMatch(
-      /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*permittedConceptIdsFor\(subjectConceptId, resolvedGrading\.neighbourConceptId\),?\s*\);/,
+      /buildExplainBackPromptContextFromInstrument\(instrument, lookup\.sourceBlocks\)/,
     );
   });
 });

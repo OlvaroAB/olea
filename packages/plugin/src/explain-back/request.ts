@@ -136,6 +136,13 @@ export interface ExplainBackRelationPartner {
   readonly edge: ConceptRelation;
   readonly neighbourConceptId: string;
   readonly neighbourName: string;
+  /**
+   * The subject's own current wording, read from the same concept records as `neighbourName`
+   * (`[D-603]`, `[D-611]`, `ol-egov.141.89.6.129`): the practice view names both ends in a
+   * relation prompt's third reflection prompt (vocabulary registry §39, "What do these passages
+   * say links {concept} and {neighbour}?"). A wording only: nothing compares or keys on it.
+   */
+  readonly subjectName: string;
 }
 
 /**
@@ -262,7 +269,7 @@ function otherEndKey(
  * retrieve by and is skipped: an unresolved endpoint never matches, and the
  * prompt stays the ordinary concept-only one. `neighbourName` is the record's
  * current wording for the neighbour, which can differ from the wording the edge
- * was minted with.
+ * was minted with; `subjectName` is the subject's, read the same way.
  */
 export function resolveExplainBackCausesPartner(
   deps: ExplainBackPartnerDeps,
@@ -279,7 +286,11 @@ export function resolveExplainBackCausesPartner(
     if (neighbourName === undefined) continue;
     const edge = resolveExplainBackRelationEdge(deps, subjectConceptId, neighbourConceptId);
     if (edge === undefined) continue;
-    return { edge, neighbourConceptId, neighbourName };
+    // The edge resolved through the records, so the subject has one too; an absent wording is
+    // skipped exactly as an unnamed neighbour is above.
+    const subjectName = records.find((record) => record.key === subjectConceptId)?.name;
+    if (subjectName === undefined) continue;
+    return { edge, neighbourConceptId, neighbourName, subjectName };
   }
   return undefined;
 }

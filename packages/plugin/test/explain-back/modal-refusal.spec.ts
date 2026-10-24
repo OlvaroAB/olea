@@ -19,6 +19,12 @@
  * either dep, so a refused or unreachable judgment never reaches the
  * accept-and-observe step at all — there is nothing to make idempotent
  * because nothing was recorded in the first place.
+ *
+ * **v0.9 (`[D-603]`, `ol-egov.141.89.6.129`):** no judgment is requested at all, so there is
+ * nothing to refuse and nothing to accept: the view reaches neither write dep from anywhere, and
+ * the only refusal it can show is the free-form topic's insufficient-notes one, before any
+ * answer. The view-level blocks below are rewritten to that; `runGradingAttempt`'s own rules
+ * stay, tested as the function they are, for when grading returns (the F5 heading note).
  */
 
 import { readFileSync } from 'node:fs';
@@ -38,70 +44,32 @@ function codeOf(relativePath: string): string {
 
 const modal = codeOf('explain-back/modal.ts');
 
-describe('ExplainBackModal — a refused or unavailable judgment records no learning failure', () => {
-  it('calls deps.acceptWithObservation exactly once in the whole file, and only inside acceptGrading', () => {
-    const calls = modal.match(/this\.deps\.acceptWithObservation\(/g) ?? [];
-    expect(calls).toHaveLength(1);
-    const acceptGradingBody = modal.slice(
-      modal.indexOf('private acceptGrading('),
-      modal.indexOf('private discardGrading('),
-    );
-    expect(acceptGradingBody).toMatch(/this\.deps\.acceptWithObservation\(/);
+describe('ExplainBackModal (v0.9) — no judgment is requested, so none is refused and none is recorded', () => {
+  it('the view calls neither deps.acceptWithObservation nor deps.recordSoloGradeAndReview, from anywhere', () => {
+    expect(modal).not.toMatch(/this\.deps\.acceptWithObservation\(/);
+    expect(modal).not.toMatch(/this\.deps\.recordSoloGradeAndReview\(/);
+    expect(modal).not.toMatch(/acceptGrading/);
   });
 
-  it('calls deps.recordSoloGradeAndReview exactly once in the whole file, and only inside acceptGrading', () => {
-    const calls = modal.match(/this\.deps\.recordSoloGradeAndReview\(/g) ?? [];
-    expect(calls).toHaveLength(1);
-    const acceptGradingBody = modal.slice(
-      modal.indexOf('private acceptGrading('),
-      modal.indexOf('private discardGrading('),
+  it('the only refusal is the free-form topic’s insufficient-notes one, reached before any answer', () => {
+    expect(modal.match(/phase: 'refused', prompt \}/g)).toHaveLength(1);
+    const topic = modal.slice(
+      modal.indexOf('private async resolveTopicPrompt('),
+      modal.indexOf('private enterNewQuestion('),
     );
-    expect(acceptGradingBody).toMatch(/this\.deps\.recordSoloGradeAndReview\(/);
+    expect(topic).toMatch(
+      /if \(context\.referenceAnswer\.trim\(\) === ''\) \{[\s\S]*?phase: 'refused', prompt \}/,
+    );
+    expect(modal).not.toMatch(/'unavailable'|'check-failed'/);
   });
 
-  it('acceptGrading is invoked from exactly one place: the Accept button renderGradedPhase renders', () => {
-    const calls = modal.match(/void this\.acceptGrading\(/g) ?? [];
-    expect(calls).toHaveLength(1);
-    const gradedPhaseBody = modal.slice(
-      modal.indexOf('private renderGradedPhase('),
-      modal.indexOf('private renderGradedRegions('),
-    );
-    expect(gradedPhaseBody).toMatch(/void this\.acceptGrading\(/);
-  });
-
-  it('neither refusal transition in submitAnswer calls acceptWithObservation or recordSoloGradeAndReview', () => {
-    const submitAnswerBody = modal.slice(
-      modal.indexOf('private async submitAnswer('),
-      modal.indexOf('private acceptGrading('),
-    );
-    expect(submitAnswerBody).toMatch(
-      /phase: 'refused',\s*prompt,\s*answer,\s*reason: outcome\.kind === 'unavailable' \? 'unavailable' : outcome\.reason/,
-    );
-    expect(submitAnswerBody).not.toMatch(/acceptWithObservation/);
-    expect(submitAnswerBody).not.toMatch(/recordSoloGradeAndReview/);
-  });
-
-  it('renderRefusedPhase never calls acceptWithObservation or recordSoloGradeAndReview', () => {
+  it('renderRefusedPhase reaches no write and no grader', () => {
     const refusedPhaseBody = modal.slice(
       modal.indexOf('private renderRefusedPhase('),
-      modal.indexOf('private renderNothingMatchedRefusal('),
+      modal.indexOf('private renderFoundList('),
     );
     expect(refusedPhaseBody.length).toBeGreaterThan(0);
-    expect(refusedPhaseBody).not.toMatch(/acceptWithObservation/);
-    expect(refusedPhaseBody).not.toMatch(/recordSoloGradeAndReview/);
-  });
-});
-
-describe('ExplainBackModal — acceptGrading threads the graded query through for the live staleness check (ol-gavc)', () => {
-  it('passes prompt.query — the exact string frozen at retrieval time, never a re-derived prompt.context.question (ol-egov.141.89.6.16) — as query on the buildObservationContext call', () => {
-    const acceptGradingBody = modal.slice(
-      modal.indexOf('private acceptGrading('),
-      modal.indexOf('private discardGrading('),
-    );
-    expect(acceptGradingBody).toMatch(
-      /this\.deps\.buildObservationContext\(\{\s*subjectConceptId:\s*prompt\.subjectConceptId,\s*permittedConceptIds:\s*prompt\.context\.permittedConceptIds \?\? \[\],\s*originInstrumentId:\s*prompt\.originInstrumentId,\s*sourceBlocks:\s*prompt\.sourceBlocks,\s*query:\s*prompt\.query,\s*\}\)\),\s*attemptId,\s*afterFeedback:\s*support\.feedbackExposure === 'shown',\s*\};/,
-    );
-    expect(acceptGradingBody).not.toMatch(/query:\s*prompt\.context\.question/);
+    expect(refusedPhaseBody).not.toMatch(/this\.deps\./);
   });
 });
 
@@ -179,12 +147,12 @@ describe('runGradingAttempt: a correctness call that cannot answer is could-not-
     expect(result).toEqual({ kind: 'unavailable' });
   });
 
-  it('submitAnswer routes every failure through runGradingAttempt and never calls a write dep', () => {
+  it('v0.9: submitAnswer runs no grading attempt at all, so no failure can follow an answer', () => {
     const submitAnswerBody = modal.slice(
       modal.indexOf('private async submitAnswer('),
-      modal.indexOf('private acceptGrading('),
+      modal.indexOf('private async recordFeedbackShownBeforeDisplay('),
     );
-    expect(submitAnswerBody).toMatch(/await runGradingAttempt\(/);
-    expect(submitAnswerBody).not.toMatch(/reason: 'insufficient-notes'/);
+    expect(submitAnswerBody).not.toMatch(/runGradingAttempt|this\.deps\.grade/);
+    expect(submitAnswerBody).not.toMatch(/phase: 'refused'/);
   });
 });

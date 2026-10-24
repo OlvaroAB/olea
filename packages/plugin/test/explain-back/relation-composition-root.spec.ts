@@ -157,7 +157,7 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     // `ol-egov.141.89.6.75` added the neighbour key, `undefined` here (no subject, so no partner).
     const earlyReturnMarker = 'if (subjectConceptId === null) {';
     expect(body).toMatch(
-      /if \(subjectConceptId === null\) \{\s*return \{\s*sourceBlocks,\s*sourceMaterial: undefined,\s*relationExpected: false,\s*neighbourConceptId: undefined,\s*\};\s*\}/,
+      /if \(subjectConceptId === null\) \{\s*return \{\s*sourceBlocks,\s*sourceMaterial: undefined,\s*relationExpected: false,\s*neighbourConceptId: undefined,\s*relationNames: undefined,\s*\};\s*\}/,
     );
     // The early return textually precedes the buildGradingSourceMaterial call.
     expect(body.indexOf(earlyReturnMarker)).toBeLessThan(
@@ -165,47 +165,36 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     );
   });
 
-  it('resolveInstrumentPrompt feeds the widened gradingSourceBlocks to the judge context, while ResolvedPrompt.sourceBlocks keeps the plain retrieval (citation lookup + accept-time staleness comparison)', () => {
+  it('v0.9 ([D-603]): resolveInstrumentPrompt takes the passages she is shown from the widened lookup, and builds no judge context', () => {
     const start = modal.indexOf('private async resolveInstrumentPrompt(');
     const end = modal.indexOf('private async resolveTopicPrompt(');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = modal.slice(start, end);
-    // `ol-egov.141.89.6.50`: `resolveGradingSourceBlocks` now returns a
-    // `ResolvedGradingSourceBlocks` object — `gradingSourceBlocks` is
-    // derived from its `.sourceBlocks` field, one line down.
     expect(body).toMatch(
-      /const resolvedGrading = await resolveGradingSourceBlocks\(\s*this\.deps,\s*subjectConceptId,\s*sourceBlocks,\s*\);\s*const gradingSourceBlocks = resolvedGrading\.sourceBlocks;/,
+      /const lookup = await resolveGradingSourceBlocks\(this\.deps, subjectConceptId, sourceBlocks\);/,
     );
+    // The question text still comes from the one builder that owns it; nothing else of the
+    // request it builds is kept (no digest, no permitted ids: nothing is sent).
     expect(body).toMatch(
-      /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*permittedConceptIdsFor\(subjectConceptId, resolvedGrading\.neighbourConceptId\),?\s*\);/,
+      /buildExplainBackPromptContextFromInstrument\(instrument, lookup\.sourceBlocks\)\s*\.question,/,
     );
-    // `ol-0r92.104` [DOS-I9] added `conceptIds` to this construction (a
-    // non-attempt record's own field, D7.1); `ol-egov.141.89.6.50` added
-    // `sourceMaterial`/`relationExpected`, carried to accept time;
-    // `ol-egov.141.89.6.75` added `neighbourConceptId`, the resolved partner's key, beside them;
-    // `ol-egov.141.89.6.4` (`[D-322]`) added `practiceOnly`, always `false`
-    // here; `[STY-9]` (`ol-l5og.18.19`) added `courseCode`/`noteTitle`, the
-    // seeding instrument's own fields, real data for the identity strip —
-    // matched by name here rather than wildcarded, so an unrelated
-    // future field slipping in unnoticed still fails this assertion instead
-    // of silently passing through a loose wildcard.
+    expect(body).not.toMatch(/permittedConceptIdsFor|misconceptionDigest/);
+    // Matched field by field, so an unrelated field slipping in still fails here.
     expect(body).toMatch(
-      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*practiceOnly: false,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*conceptIds: instrument\.conceptIds,\s*query,\s*sourceMaterial: resolvedGrading\.sourceMaterial,\s*relationExpected: resolvedGrading\.relationExpected,\s*neighbourConceptId: resolvedGrading\.neighbourConceptId,\s*courseCode: instrument\.courseCode,\s*noteTitle: instrument\.noteTitle,\s*\};/,
+      /const prompt: ResolvedPrompt = \{\s*question: [\s\S]*?\.question,\s*subjectConceptId,\s*originInstrumentId: instrument\.instrumentId,\s*passages: lookup\.sourceBlocks,\s*shape:[\s\S]*?\{ kind: 'concept' \},\s*conceptIds: instrument\.conceptIds,\s*courseCode: instrument\.courseCode,\s*noteTitle: instrument\.noteTitle,\s*\};/,
     );
   });
 
   it('resolveTopicPrompt also routes through resolveGradingSourceBlocks with a null subjectConceptId', () => {
     const start = modal.indexOf('private async resolveTopicPrompt(');
-    const end = modal.indexOf('private async submitAnswer(');
+    const end = modal.indexOf('private enterNewQuestion(');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = modal.slice(start, end);
     expect(body).toMatch(
-      /const resolvedGrading = await resolveGradingSourceBlocks\(this\.deps, null, sourceBlocks\);\s*const gradingSourceBlocks = resolvedGrading\.sourceBlocks;/,
+      /const lookup = await resolveGradingSourceBlocks\(this\.deps, null, sourceBlocks\);/,
     );
-    expect(body).toMatch(
-      /buildExplainBackPromptContextFromTopic\(\s*topic,\s*gradingSourceBlocks,\s*\[\],\s*permittedConceptIdsFor\(subjectConceptId\),?\s*\);/,
-    );
+    expect(body).toMatch(/buildExplainBackPromptContextFromTopic\(topic, lookup\.sourceBlocks\);/);
   });
 });

@@ -118,6 +118,7 @@
  * record at all.
  */
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import {
   calendarDayFromLocalDate,
   type McqMisconceptionPick,
@@ -128,6 +129,7 @@ import {
   misconceptionLogPath,
   parseMisconceptionLog,
   parseReviewLog,
+  projectInstrumentValidity,
   projectMisconceptionsFromAllSources,
   REVIEW_LOG_FOLDER,
   reviewLogPath,
@@ -208,21 +210,27 @@ export function createVaultMisconceptionStore(
           today,
           probeDays,
         );
-        const mcqPicks: McqMisconceptionPick[] = [];
+        const reviewEntries: ReviewLogEntry[] = [];
         for (const path of reviewPaths) {
           const content = await deps.vault.read(path);
-          const parsed = parseReviewLog(content);
-          for (const record of parsed.records) {
-            if (record.kind !== 'misconception-observed') continue;
-            mcqPicks.push({
-              eventId: record.eventId,
-              timestamp: record.timestamp,
-              instrumentId: record.instrumentId,
-              conceptIds: record.conceptIds,
-              reviewEventId: record.reviewEventId,
-              distractor: record.distractor,
-            });
-          }
+          reviewEntries.push(...parseReviewLog(content).records);
+        }
+        // `[D-338]` item 3, `ol-3ux7.5.57.104`: current readings exclude the defect. A pick
+        // observed on an instrument the validity fold proves invalid (a standing rejection, a
+        // defect suspension) counts in no current reading; the review log itself is untouched.
+        const { provenInvalid } = projectInstrumentValidity(reviewEntries);
+        const mcqPicks: McqMisconceptionPick[] = [];
+        for (const record of reviewEntries) {
+          if (record.kind !== 'misconception-observed') continue;
+          if (provenInvalid.has(record.instrumentId)) continue;
+          mcqPicks.push({
+            eventId: record.eventId,
+            timestamp: record.timestamp,
+            instrumentId: record.instrumentId,
+            conceptIds: record.conceptIds,
+            reviewEventId: record.reviewEventId,
+            distractor: record.distractor,
+          });
         }
 
         return projectMisconceptionsFromAllSources(merged.events, mcqPicks);

@@ -28,6 +28,9 @@
  * it see its own attempt, is checked against the source text with comments
  * stripped (`modal-idempotency.spec.ts`'s own technique) so a doc paragraph
  * describing the wiring can't satisfy an assertion that the wiring exists.
+ *
+ * **v0.9 (`[D-603]`, `ol-egov.141.89.6.129`):** the sentence is removed from every path; the gate
+ * is dormant and keeps its tests below.
  */
 
 import { readFileSync } from 'node:fs';
@@ -80,43 +83,19 @@ describe('isConfirmedFirstFullDepth — the safe default is unconfirmed', () => 
   });
 });
 
-describe('computeAcceptGrading gates the milestone sentence on the confirmed-first-time check', () => {
-  it('resolves isConfirmedFirstFullDepth before either write this call makes (the correctness accept, then the SOLO depth write)', () => {
-    const body = modal.slice(
-      modal.indexOf('private async computeAcceptGrading('),
-      modal.indexOf('private renderMasteryTag('),
-    );
-    expect(body.length).toBeGreaterThan(0);
-    const gateIndex = body.indexOf('isConfirmedFirstFullDepth(');
-    const acceptWriteIndex = body.indexOf('this.deps.acceptWithObservation(');
-    const soloWriteIndex = body.indexOf('this.deps.recordSoloGradeAndReview(');
-    expect(gateIndex).toBeGreaterThan(-1);
-    expect(acceptWriteIndex).toBeGreaterThan(-1);
-    expect(soloWriteIndex).toBeGreaterThan(-1);
-    expect(gateIndex).toBeLessThan(acceptWriteIndex);
-    expect(gateIndex).toBeLessThan(soloWriteIndex);
-  });
-
-  it('never calls explainBackFullDepthEncouragement except behind that gate', () => {
-    const body = modal.slice(
-      modal.indexOf('private async computeAcceptGrading('),
-      modal.indexOf('private renderMasteryTag('),
-    );
-    expect(body).toMatch(/explainBackFullDepthEncouragement\(result\.accepted\)/);
-    // The call sits inside a conditional keyed on the gate's own result —
-    // not merely present somewhere in the same function body.
-    const gateVarMatch = body.match(/const (\w+) = isConfirmedFirstFullDepth\(/);
-    expect(gateVarMatch).not.toBeNull();
-    const gateVar = gateVarMatch?.[1] ?? '';
-    expect(body).toMatch(
-      new RegExp(
-        `${gateVar}\\s*\\?\\s*explainBackFullDepthEncouragement\\(result\\.accepted\\)\\s*:\\s*null`,
-      ),
-    );
+/**
+ * `[D-603]` (`ol-egov.141.89.6.129`, F5.3 as amended): the v0.9 view states no depth reading of any
+ * kind, so the first-full-depth sentence is removed from every path, gate or no gate. The gate
+ * above stays, tested as the function it is, for when grading returns (the F5 heading note).
+ */
+describe('v0.9: the first-full-depth sentence is on no path', () => {
+  it('the view calls neither the gate nor the milestone sentence', () => {
+    expect(modal).not.toMatch(/isConfirmedFirstFullDepth|explainBackFullDepthEncouragement/);
+    expect(modal).not.toMatch(/olea-explain-back-encouragement/);
   });
 });
 
-describe('main.ts wires getMasteryState into the modal (ol-egov.141.89.6.41), so the gate is live in production', () => {
+describe('main.ts wires getMasteryState into the modal (ol-egov.141.89.6.41); in v0.9 its one reader is the mastery tag', () => {
   it("openExplainBackModal's construction call supplies a getMasteryState field", () => {
     const start = mainTs.indexOf('private openExplainBackModal(');
     expect(start).toBeGreaterThan(-1);

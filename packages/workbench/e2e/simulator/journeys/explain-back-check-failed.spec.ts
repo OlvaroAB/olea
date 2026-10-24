@@ -1,20 +1,17 @@
 /**
- * F9.S15 — journey "explain-back-check-failed": forces explain-back's transient check-failed
- * refusal deterministically via WBX-27's fault axis, rather than hoping a world's own default
- * topic happens to miss the cassette (`ol-43ur` [WBX-27]).
+ * F9.S15 — journey "explain-back-check-failed" (`ol-43ur` [WBX-27]), rewritten for v0.9's
+ * ungraded practice view (`[D-603]`, `ol-egov.141.89.6.129`). It used to force explain-back's
+ * transient check-failed refusal through WBX-27's fault axis; in v0.9 no check runs, so there is
+ * nothing for a fault to fail. It now proves exactly that, in the real plugin: with the fault
+ * armed immediately before "Show the passages", the passages still appear and no check-failed
+ * refusal can be drawn, because no Worker call follows an answer (F5.2 as amended).
  *
  * Reuses `explain-back.spec.ts`'s own real-gesture sequence through the topic step (the same
  * default-topic derivation, `driverExplain`'s own `defaultExplainTopic` rule — see that file's
- * module doc for why this must stay byte-for-byte in step with that function), then arms
- * `forceNextTransportFailure()` immediately before "Check this" is clicked — the point in the
- * sequence where the grading task is the very next Worker call issued, so the forced failure
- * lands there and only there (topic-step retrieval is a LOCAL search, no Worker call — see
- * `explain-back/copy.ts`'s own two-refusal-family doc — so arming any earlier risks the wrong
- * call consuming the one-shot trigger).
+ * module doc).
  *
- * Step captured: refused, once the modal renders `EXPLAIN_BACK_CHECK_FAILED_TEXT` — or, on a
- * world whose default topic genuinely resolves to nothing before the fault axis ever gets a
- * turn, the real insufficient-notes refusal captured honestly instead.
+ * Step captured: passages — or, on a world whose default topic genuinely resolves to nothing, the
+ * real insufficient-notes refusal captured honestly instead, under the same step name.
  */
 import { expect, test } from '@playwright/test';
 import { gotoSimulator, resetSimulator } from '../helpers.js';
@@ -32,7 +29,9 @@ const WEEK = 0;
 /** `OLEA_COMMAND_EXPLAIN_BACK` (`packages/plugin/src/commands/ids.ts`), restated as a literal per this suite's convention (`explain-back.spec.ts`'s own header note). */
 const EXPLAIN_BACK_COMMAND_ID = 'olea-explain-back';
 const CONTINUE_LABEL = 'Continue';
-const SUBMIT_LABEL = 'Check this';
+/** Vocabulary registry §39's words, same convention. */
+const SUBMIT_LABEL = 'Show the passages';
+const PASSAGES_HEADING = 'From your notes';
 
 // Invented, never copied from any real note — see `explain-back.spec.ts`'s own module doc.
 const INVENTED_ANSWER =
@@ -40,7 +39,7 @@ const INVENTED_ANSWER =
   'off, and the outcome follows from evidence the material actually shows, not just something ' +
   'that seems to fit.';
 
-test(`@auto-web:simulator/journeys/explain-back-check-failed ${WORLD}/${PERSONA} — a forced transport fault reads as the transient check-failed refusal, never insufficient-notes`, async ({
+test(`@auto-web:simulator/journeys/explain-back-check-failed ${WORLD}/${PERSONA} — a forced transport fault cannot reach the practice view: no Worker call follows an answer`, async ({
   page,
 }) => {
   await gotoSimulator(page, { world: WORLD, persona: PERSONA });
@@ -76,19 +75,22 @@ test(`@auto-web:simulator/journeys/explain-back-check-failed ${WORLD}/${PERSONA}
   const refusal = modal.locator('.olea-explain-back-refusal');
   await expect(answerBox.or(refusal).first()).toBeVisible({ timeout: 30_000 });
   if ((await refusal.count()) > 0) {
-    // A real, honest state: this world's default topic resolved to nothing before the fault
-    // axis ever got a turn (topic-step retrieval is local, no Worker call) — capture it rather
-    // than fabricating a reach past a real refusal.
-    await captureJourneyStep(page, JOURNEY, WEEK, 'refused');
+    // A real, honest state: this world's default topic resolved to nothing before an answer box
+    // existed — capture it rather than fabricating a reach past a real refusal.
+    await captureJourneyStep(page, JOURNEY, WEEK, 'passages');
     return;
   }
 
   await answerBox.fill(INVENTED_ANSWER);
-  // Armed immediately before the one gesture whose Worker call must fail — WBX-27's one-shot
-  // trigger, consumed by the very next matching call (`controller.ts`'s own doc).
+  // Armed immediately before the one gesture that, in the graded view, made the Worker call this
+  // fault would have failed. In v0.9 that gesture makes no call, so the fault has nothing to hit.
   await driverForceNextTransportFailure(page);
   await modal.getByRole('button', { name: SUBMIT_LABEL, exact: true }).click();
 
-  await expect(refusal).toHaveText(EXPLAIN_BACK_CHECK_FAILED_TEXT, { timeout: 30_000 });
-  await captureJourneyStep(page, JOURNEY, WEEK, 'refused');
+  await expect(
+    modal.locator('.olea-explain-back-heading', { hasText: PASSAGES_HEADING }),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(modal.getByText(EXPLAIN_BACK_CHECK_FAILED_TEXT, { exact: true })).toHaveCount(0);
+  await expect(refusal).toHaveCount(0);
+  await captureJourneyStep(page, JOURNEY, WEEK, 'passages');
 });

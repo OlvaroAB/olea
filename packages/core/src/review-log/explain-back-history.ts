@@ -70,6 +70,15 @@
  * nothing extra to get right.
  *
  * ===========================================================================
+ * NO ROW CARRIES A DEPTH READING (`[D-603]`)
+ * ===========================================================================
+ * Explain-back ships in v0.9 as ungraded practice, so no history row carries
+ * a SOLO level — the grade's verdict stays on the log record for the folds
+ * that read it there, and is never copied onto a display row. Her saved
+ * practice explanations are listed by `practiceExplanationHistoryByInstrument`
+ * below (`[D-614]`).
+ *
+ * ===========================================================================
  * REACHABILITY (`[D-072]`)
  * ===========================================================================
  * No production caller exists yet. The write side this reads
@@ -92,8 +101,11 @@ import type {
   ExplainBackGrade,
   ReviewLogEntry,
   ReviewLogRecord,
-  SoloLevel,
 } from 'olea-contracts';
+import {
+  isPracticeExplanation,
+  type PracticeExplanationLogRecord,
+} from './practice-explanation.js';
 
 /** One graded explain-back attempt, projected for display — never a second write. */
 export interface ExplainBackHistoryEntry {
@@ -102,7 +114,6 @@ export interface ExplainBackHistoryEntry {
   readonly instrumentId: string;
   /** Verbatim from the record — R1/R2, never sorted or deduplicated here. */
   readonly conceptIds: readonly string[];
-  readonly soloLevel: SoloLevel;
   /** Opaque `[D-077]` content-store pointer — resolve with `./content-store.ts`'s `readContentForGrade`. */
   readonly contentRef: string;
   /**
@@ -169,7 +180,6 @@ export function explainBackGradeHistoryByInstrument(
       timestamp: entry.timestamp,
       instrumentId: entry.instrumentId,
       conceptIds: entry.conceptIds,
-      soloLevel: grade.soloLevel,
       contentRef: grade.contentRef,
       revisionOf: grade.revisionOf,
       artifactProvenance: grade.artifactProvenance,
@@ -206,6 +216,51 @@ export function latestExplainBackGradeByInstrument(
   for (const [instrumentId, list] of history) {
     const mostRecent = list[list.length - 1];
     if (mostRecent !== undefined) result.set(instrumentId, mostRecent);
+  }
+  return result;
+}
+
+/** One saved practice explanation, projected for display: no reading of any kind (`[D-603]`, `[D-614]`). */
+export interface PracticeExplanationHistoryEntry {
+  readonly eventId: string;
+  readonly timestamp: string;
+  readonly instrumentId: string;
+  readonly conceptIds: readonly string[];
+  /** Opaque `[D-077]` content-store pointer to her text, resolved only on expansion. */
+  readonly contentRef: string;
+}
+
+/**
+ * `instrumentId` -> every saved practice explanation, oldest first by
+ * `(instant, eventId)`. Every saved one is listed, including an answer the
+ * local check flagged: it is still her saved text, and the flag only decides
+ * study activity (F8.4b, D7.1). One entry per saved explanation — the writer
+ * is idempotent on `attemptId`, and a duplicate `eventId` or `attemptId`
+ * (the same line read from two devices) is folded to one. A non-attempt is a
+ * different log kind and never appears. Order-independent, like the graded
+ * projection above; an instrument with none is absent from the map.
+ */
+export function practiceExplanationHistoryByInstrument(
+  entries: readonly ReviewLogEntry[],
+): ReadonlyMap<string, readonly PracticeExplanationHistoryEntry[]> {
+  const records: PracticeExplanationLogRecord[] = entries.filter(isPracticeExplanation);
+  records.sort(compareByInstantThenEventId);
+  const seenEvents = new Set<string>();
+  const seenAttempts = new Set<string>();
+  const result = new Map<string, PracticeExplanationHistoryEntry[]>();
+  for (const record of records) {
+    if (seenEvents.has(record.eventId) || seenAttempts.has(record.attemptId)) continue;
+    seenEvents.add(record.eventId);
+    seenAttempts.add(record.attemptId);
+    const list = result.get(record.instrumentId) ?? [];
+    list.push({
+      eventId: record.eventId,
+      timestamp: record.timestamp,
+      instrumentId: record.instrumentId,
+      conceptIds: record.conceptIds,
+      contentRef: record.contentRef,
+    });
+    result.set(record.instrumentId, list);
   }
   return result;
 }

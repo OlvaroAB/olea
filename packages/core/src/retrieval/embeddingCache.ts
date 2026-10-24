@@ -44,6 +44,18 @@
  * re-embedding and nothing else, and a one-shot migration that has to run
  * correctly on every user's machine is a strictly worse thing to own than a
  * rebuild that is already a supported, tested path.
+ *
+ * **Why a request is bounded by size as well as by count, and why a failing
+ * request is not re-sent at every drain (`ol-egov.141.89.1.103`).** The
+ * provider sends one request to the embedding model per `embed` call, and that
+ * model refuses a request whose total size is too large however many chunks
+ * carry it: 32 long chunks (19,472 tokens) failed at the staging Worker every
+ * time while their two halves (10,512 and 8,960 tokens) embedded. A count of
+ * 32 alone therefore left a long document never embedded and re-sent the same
+ * failing request at every indexing drain. Requests are now filled up to
+ * `batchSize` chunks or `MAX_ESTIMATED_TOKENS_PER_REQUEST`, whichever comes
+ * first, and a request the provider answered and refused is re-sent smaller
+ * (halved) and only a bounded number of times, see `ensureEmbeddings`.
  */
 
 import {
@@ -60,6 +72,7 @@ import type {
   RetrievalChunk,
 } from './types.js';
 import { EMBEDDING_CACHE_VERSION, emptyEmbeddingCache } from './types.js';
+import { WorkerEmbeddingError } from './workerProvider.js';
 
 export interface EmbeddingCacheEngineDeps {
   readonly store: EmbeddingCacheStore;
@@ -68,9 +81,67 @@ export interface EmbeddingCacheEngineDeps {
   readonly model: string;
   /** How many missing chunks to send the provider per `embed` call. Defaults to 32 — small enough to stay a background-friendly unit of work (C2.6), large enough that a large backlog doesn't become one round trip per chunk. */
   readonly batchSize?: number;
+  /** The per-request size bound, in estimated tokens. Defaults to `MAX_ESTIMATED_TOKENS_PER_REQUEST`; injectable so a test can use small texts. */
+  readonly maxEstimatedTokensPerRequest?: number;
 }
 
 const DEFAULT_BATCH_SIZE = 32;
+
+/**
+ * The most estimated tokens one embedding request may carry (`ol-egov.141.89.1.103`).
+ *
+ * **Declared, not fitted.** It is a plain-English safety margin, not a number
+ * fitted to data. What is known about the model's request size: a request of
+ * about 15,700 tokens succeeded on the staging Worker; one of 19,472 tokens
+ * failed; its two halves, 10,512 and 8,960 tokens, both succeeded. Where the
+ * limit sits between 15,700 and 19,472 is unmeasured. At the measured ratio of
+ * about 3 characters per token, 10,000 sits under both succeeding halves and
+ * well under the failing request; and even for text dense enough to run at 2
+ * characters per token (so the estimate undercounts by half) a full request
+ * would be about 15,000 real tokens, still under the largest request known to
+ * succeed.
+ */
+export const MAX_ESTIMATED_TOKENS_PER_REQUEST = 10_000;
+
+/** Characters per token used to estimate a text's size; the measured ratio is about 3. */
+const CHARACTERS_PER_TOKEN = 3;
+
+/** How many times the provider may answer and refuse a chunk sent on its own before this engine instance stops sending it. */
+export const MAX_ANSWERED_FAILURES = 3;
+
+/** Estimated tokens of one text: `ceil(characters / 3)`. */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARACTERS_PER_TOKEN);
+}
+
+/**
+ * `true` only when the provider ANSWERED and refused the request itself, so
+ * that sending the same request again is expected to fail again. The Worker's
+ * error codes (`ErrorCode` in the contracts package) split as follows:
+ *
+ * - `invalid-request` counts: the Worker read the request and rejected it.
+ * - `upstream-error` counts: the Worker reached the model and the model failed
+ *   on this request, which is the shape a too-large request takes.
+ * - `internal-error` counts: the Worker answered with a fault tied to this
+ *   request; bounded by the cap, and held back only until the engine is recreated.
+ * - `unauthenticated`, `update-required`, `quota-exceeded` never count: they
+ *   are about her token, plugin version or allowance, not about the chunks, and
+ *   they clear without any change to the chunks.
+ * - `grounding-refused` never counts: it belongs to generative tasks, not embedding.
+ * - An error with no code (a malformed response, a local check) never counts,
+ *   and neither does anything that is not a `WorkerEmbeddingError`: a
+ *   transport failure (no response), a timeout, a rate limit or unavailability
+ *   reaching the client as a thrown transport error is an offline or busy
+ *   period, never a verdict on the chunks.
+ */
+function isCountedFailure(error: unknown): boolean {
+  if (!(error instanceof WorkerEmbeddingError)) return false;
+  return (
+    error.code === 'invalid-request' ||
+    error.code === 'upstream-error' ||
+    error.code === 'internal-error'
+  );
+}
 
 /**
  * `true` when a persisted value can be read by this build: it exists, it was
@@ -97,13 +168,19 @@ export class EmbeddingCacheEngine {
   private readonly provider: EmbeddingProvider;
   private readonly model: string;
   private readonly batchSize: number;
+  private readonly maxTokens: number;
   private entries: Map<string, QuantisedVector>;
+  /** In memory only, never persisted (the cache shape is unchanged): content hash to the largest request size, in chunks, it may next be sent in. Set to half the size of a request the provider answered and refused. */
+  private readonly sizeCap = new Map<string, number>();
+  /** In memory only: content hash to the number of times the provider answered and refused it sent on its own. Hashes only, no content. */
+  private readonly soloFailures = new Map<string, number>();
 
   private constructor(deps: EmbeddingCacheEngineDeps, entries: Map<string, QuantisedVector>) {
     this.store = deps.store;
     this.provider = deps.provider;
     this.model = deps.model;
     this.batchSize = deps.batchSize ?? DEFAULT_BATCH_SIZE;
+    this.maxTokens = deps.maxEstimatedTokensPerRequest ?? MAX_ESTIMATED_TOKENS_PER_REQUEST;
     this.entries = entries;
   }
 
@@ -133,6 +210,53 @@ export class EmbeddingCacheEngine {
   /** The pinned Slot E model id this cache is keyed against — what `engine.ts`'s `retrieve` passes when embedding the query itself, so the query vector and the cached document codes are always comparable. */
   get modelId(): string {
     return this.model;
+  }
+
+  /** How many chunks this engine instance has stopped sending after the provider answered and refused each of them `MAX_ANSWERED_FAILURES` times. Diagnostics only: a count, no content. Reset by `clear()` and by a new engine. */
+  get heldBackCount(): number {
+    let held = 0;
+    for (const count of this.soloFailures.values()) if (count >= MAX_ANSWERED_FAILURES) held += 1;
+    return held;
+  }
+
+  private isHeldBack(hash: string): boolean {
+    return (this.soloFailures.get(hash) ?? 0) >= MAX_ANSWERED_FAILURES;
+  }
+
+  /**
+   * Fills requests in order from `hashes`: a request takes the next chunk
+   * unless that would exceed `batchSize`, the token bound, or the size cap of
+   * any chunk already in it. A chunk larger than the token bound goes alone
+   * (never split).
+   */
+  private buildBatches(
+    hashes: readonly string[],
+    textByHash: ReadonlyMap<string, string>,
+  ): string[][] {
+    const batches: string[][] = [];
+    let current: string[] = [];
+    let tokens = 0;
+    let cap = Number.POSITIVE_INFINITY;
+    for (const hash of hashes) {
+      const chunkTokens = estimateTokens(textByHash.get(hash) ?? '');
+      const chunkCap = this.sizeCap.get(hash) ?? Number.POSITIVE_INFINITY;
+      const nextCap = Math.min(cap, chunkCap);
+      const fits =
+        current.length + 1 <= this.batchSize &&
+        current.length + 1 <= nextCap &&
+        tokens + chunkTokens <= this.maxTokens;
+      if (current.length > 0 && !fits) {
+        batches.push(current);
+        current = [];
+        tokens = 0;
+        cap = Number.POSITIVE_INFINITY;
+      }
+      current.push(hash);
+      tokens += chunkTokens;
+      cap = Math.min(cap, chunkCap);
+    }
+    if (current.length > 0) batches.push(current);
+    return batches;
   }
 
   /**
@@ -168,6 +292,24 @@ export class EmbeddingCacheEngine {
    * worst case) is the honest failure mode here, not a thrown exception that
    * would take down a caller who has no other reason to fail — see
    * `engine.ts`'s `retrieve`, which is exactly that caller.
+   *
+   * Requests are bounded by chunk count (`batchSize`) and by estimated tokens
+   * (`MAX_ESTIMATED_TOKENS_PER_REQUEST`); see the module doc.
+   *
+   * **A failing request is not re-sent unchanged at every drain.** Only a
+   * failure the provider ANSWERED and refused counts (`isCountedFailure`); a
+   * transport failure, timeout, rate limit, unavailability or authentication
+   * error is an offline or busy period and never counts, so it never holds a
+   * chunk back however many drains it lasts. After a counted failure the call
+   * stops, and the chunks of that request are next sent in half-sized
+   * requests, so a size failure the estimate missed is split down. A chunk
+   * that the provider refuses `MAX_ANSWERED_FAILURES` times on its own is held
+   * back: not sent again by this engine instance until it is recreated or
+   * `clear()` runs. Failures of a multi-chunk request only halve it and do not
+   * count against its chunks, because one bad chunk must not hold back the
+   * others sharing its request. This state is in memory only; the persisted
+   * cache shape is unchanged. A held-back chunk stays missing, so retrieval
+   * degrades to what is cached.
    */
   async ensureEmbeddings(
     chunks: readonly RetrievalChunk[],
@@ -177,6 +319,7 @@ export class EmbeddingCacheEngine {
     for (const chunk of chunks) {
       if (seen.has(chunk.contentHash) || this.entries.has(chunk.contentHash)) continue;
       seen.add(chunk.contentHash);
+      if (this.isHeldBack(chunk.contentHash)) continue;
       missingHashes.push(chunk.contentHash);
     }
     if (missingHashes.length === 0) return this.snapshot();
@@ -187,8 +330,7 @@ export class EmbeddingCacheEngine {
     }
 
     let changed = false;
-    for (let i = 0; i < missingHashes.length; i += this.batchSize) {
-      const batch = missingHashes.slice(i, i + this.batchSize);
+    for (const batch of this.buildBatches(missingHashes, textByHash)) {
       const texts = batch.map((hash) => textByHash.get(hash) ?? '');
       try {
         const result = await this.provider.embed({ model: this.model, texts });
@@ -196,13 +338,25 @@ export class EmbeddingCacheEngine {
           const vector = result.vectors[index];
           if (vector) {
             this.entries.set(hash, quantiseVector(vector));
+            this.sizeCap.delete(hash);
+            this.soloFailures.delete(hash);
             changed = true;
           }
         });
-      } catch {
+      } catch (error) {
+        if (isCountedFailure(error)) {
+          if (batch.length === 1) {
+            const hash = batch[0] ?? '';
+            this.soloFailures.set(hash, (this.soloFailures.get(hash) ?? 0) + 1);
+          } else {
+            const half = Math.ceil(batch.length / 2);
+            for (const hash of batch) this.sizeCap.set(hash, half);
+          }
+        }
         // Partial progress is kept (see the module doc); stop trying further
         // batches this call — a still-down provider would only fail
-        // identically on the next batch.
+        // identically on the next batch, and a refused request is retried
+        // smaller from the next drain.
         break;
       }
     }
@@ -214,6 +368,8 @@ export class EmbeddingCacheEngine {
   /** D-006: delete the whole cache. Always safe — the next `ensureEmbeddings` call reconstructs whatever it's asked for. */
   async clear(): Promise<void> {
     this.entries = new Map();
+    this.sizeCap.clear();
+    this.soloFailures.clear();
     await this.persist();
   }
 

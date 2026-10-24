@@ -272,32 +272,35 @@ export interface RegistryExplainBackSummary {
 }
 
 /**
- * One graded explain-back attempt on an instrument's registry entry
- * (F8.4b, `[D-175]`) — oldest first, exactly
- * `../review-log/explain-back-history.ts`'s `explainBackGradeHistoryByInstrument`
- * order. Deliberately thin: never the student's answer text or the
- * grader's feedback — those stay behind `[D-077]`'s content store
- * (`contentRef`), resolved only for an entry a caller chooses to expand,
- * which this registry surface does not do. Never a raw scalar or
- * percentage either (F8.3, F2.11's two-axis discipline) — `soloLevel` is
- * the SOLO enum value itself, for `./build.ts`'s doc's own reasons the
- * PLUGIN copy layer renders in the reporting voice (GLOSSARY SOLO rule 5:
- * the raw name is never exposed to her), never rendered by this module.
+ * One row of an instrument's explain-back history (F8.4b, `[D-175]`) — a graded
+ * attempt or, in v0.9, a saved practice explanation (`[D-614]`), oldest first
+ * by date. Deliberately thin and **carrying no reading of any kind**
+ * (`[D-603]`): never a SOLO level, depth, grade, verdict or number, and never
+ * the student's answer text or the grader's feedback — her text stays behind
+ * `[D-077]`'s content store, resolved only when she expands a practice row.
  */
-export interface RegistryExplainBackHistoryRow {
-  readonly eventId: string;
-  readonly timestamp: string;
-  readonly soloLevel: SoloLevel;
-  /**
-   * True only for the instrument's CURRENT (non-superseded) graded attempt,
-   * and only while that grade is presently quarantined under `[D-095]`.
-   * An older, already-superseded attempt never carries this even if it was
-   * disputed once — `[D-095]`'s evidence-relative aging means a dispute
-   * retires with the reading it rode once a fresher grade lands, and this
-   * field never re-derives that itself; see `./build.ts`'s doc.
-   */
-  readonly contested: boolean;
-}
+export type RegistryExplainBackHistoryRow =
+  | {
+      readonly kind: 'graded';
+      readonly eventId: string;
+      readonly timestamp: string;
+      /**
+       * True only for the instrument's CURRENT (non-superseded) graded attempt,
+       * and only while that grade is presently quarantined under `[D-095]`.
+       * An older, already-superseded attempt never carries this even if it was
+       * disputed once; see `./build.ts`'s doc.
+       */
+      readonly contested: boolean;
+    }
+  | {
+      readonly kind: 'practice';
+      readonly eventId: string;
+      readonly timestamp: string;
+      /** Always false: nothing about a practice explanation was graded, so there was nothing to dispute. */
+      readonly contested: false;
+      /** Opaque `[D-077]` content-store pointer to her text — resolved only on expansion. */
+      readonly contentRef: string;
+    };
 
 /** One row of the registry — one concept, everything F8.4 says the browse surface must show about it. */
 export interface RegistryConceptEntry {

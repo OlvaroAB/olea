@@ -82,7 +82,11 @@
  */
 
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
-import { scoredConceptOf } from '../session/scored-concept.js';
+import {
+  isStudyActivity,
+  type StudyActivityEntry,
+  studiedConceptOf,
+} from '../review-log/practice-explanation.js';
 import {
   type CalendarDay,
   calendarDayOfTimestamp,
@@ -228,6 +232,19 @@ function reviewsOf(entries: readonly ReviewLogEntry[]): readonly ReviewLogRecord
   return entries.filter((entry): entry is ReviewLogRecord => entry.kind === 'review');
 }
 
+/**
+ * The occasions of work the two rates and the two attendance shares count
+ * (D7.1, `[D-614]`): every review, and every genuine practice explanation, one
+ * occasion each — the shared study-activity rule
+ * (`../review-log/practice-explanation.ts`'s `isStudyActivity`). A flagged
+ * answer or a non-attempt is not one. The assessment days and `earlyShare`
+ * still read reviews alone: they read `selectionContext`, which only a review
+ * carries.
+ */
+function occasionsOf(entries: readonly ReviewLogEntry[]): readonly StudyActivityEntry[] {
+  return entries.filter(isStudyActivity);
+}
+
 function daysBetween(from: CalendarDay, to: CalendarDay): number {
   return Math.round(
     (Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`)) / 86_400_000,
@@ -284,12 +301,16 @@ function abstain(reason: string, measured: SpacingMeasured | null = null): Spaci
  */
 export function detectSpacing(entries: readonly ReviewLogEntry[]): SpacingInsight {
   const reviews = reviewsOf(entries);
-  if (reviews.length < MIN_REVIEWS) {
+  // Every count below is of occasions of work: a review, or a genuine practice explanation
+  // (D7.1, `[D-614]`; see `occasionsOf`). `reviewCount` and the `Reviews` names keep their
+  // historical spelling.
+  const occasions = occasionsOf(entries);
+  if (occasions.length < MIN_REVIEWS) {
     return abstain(`fewer than ${MIN_REVIEWS} reviews`);
   }
 
   const dayOfReview: CalendarDay[] = [];
-  for (const record of reviews) {
+  for (const record of occasions) {
     const day = calendarDayOfTimestamp(record.timestamp);
     if (day !== null) dayOfReview.push(day);
   }
@@ -470,7 +491,7 @@ export function detectSpacing(entries: readonly ReviewLogEntry[]): SpacingInsigh
  */
 export interface CourseSpacingReading {
   readonly course: string;
-  /** Dated reviews this course's reading was computed over. */
+  /** Dated occasions (reviews and genuine practice explanations, `[D-614]`) this course's reading was computed over. */
   readonly reviewCount: number;
   /** First and last calendar day of those reviews, or `null` when none is dated. */
   readonly span: { readonly from: CalendarDay; readonly to: CalendarDay } | null;
@@ -506,12 +527,14 @@ export function detectSpacingByCourse(
     coursesByConcept.set(row.conceptId, set);
   }
 
-  const reviewsByCourse = new Map<string, ReviewLogRecord[]>();
+  const reviewsByCourse = new Map<string, StudyActivityEntry[]>();
   for (const course of allCourses) reviewsByCourse.set(course, []);
-  for (const record of reviewsOf(entries)) {
+  for (const record of occasionsOf(entries)) {
     // `[D-423]`: a review belongs to the courses of the one concept it scored, never to a course
     // only a concept it names as context belongs to. A scored concept in two courses is in both.
-    const scored = scoredConceptOf(record);
+    // A genuine practice explanation belongs, the same way, to the courses of the concept it
+    // explained (D7.1, `[D-614]`).
+    const scored = studiedConceptOf(record);
     if (scored === undefined) continue;
     for (const course of coursesByConcept.get(scored) ?? []) {
       reviewsByCourse.get(course)?.push(record);

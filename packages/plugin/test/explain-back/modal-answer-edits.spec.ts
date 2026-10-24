@@ -1,27 +1,44 @@
 /**
- * `ExplainBackModal`'s `answerEdits` capture (`ol-0r92.56`, `[D-228 /
- * SIG-3]`) — source-level assertions, not a behavioural test, for the same
- * reason `modal-duration.spec.ts` gives at its own header: `modal.ts`
- * extends Obsidian's `Modal`, and `obsidian`'s `package.json` `main` is
- * `""`, so it cannot be instantiated under Vitest at all. Assertions run
- * against the source text with comments stripped, so a doc paragraph
- * describing the capture can't satisfy an assertion about the capture code
- * actually existing.
+ * `answerEdits` (`ol-0r92.56`, `[D-228 / SIG-3]`, F2.16), as v0.9 has it (`[D-603]`,
+ * `ol-egov.141.89.6.129`). The two counts — when she first typed and how many times she came back
+ * to a fresh answer box — ride on the explain-back REVIEW record, and a practice attempt writes no
+ * review record: its one record is the practice explanation (D7.1, `[D-614]`), which has no field
+ * for them. So the v0.9 view captures neither (no input listener, no counter), adds them nowhere,
+ * and — scenario 7, still binding — shows nothing about how she composed her answer.
  *
- * Covers DF-20 scenarios 5–7 of `features/F5-explain-it-back.md`'s
- * "F2.16 / [D-228]" block (`@auto:plugin/explain-back/modal.spec`):
- *   5. an answer typed once, straight through, is recorded as one burst and
- *      not as an absent signal;
- *   6. the counter survives the modal re-rendering the answering phase;
- *   7. nothing about the count is shown to her while she writes.
- * Scenarios 1–4 (the schema itself) live in `contracts/review-log-v5.spec
- * .ts`; scenario 8 (the rating and grade untouched) is `solo-review.ts`'s
- * own spec, a file this bead does not own.
+ * The schema half of F2.16 (scenarios 1–4) stays in `contracts/review-log-v5.spec.ts`, unchanged;
+ * scenarios 5 and 6 (one burst; the counter surviving a re-render) describe a capture that rides
+ * a review record, and return with grading (the F5 heading note).
+ *
+ * Scenarios: `features/F5-explain-it-back.md` (olea-service), "F2.16 / [D-228]": the three
+ * tagged `modal-answer-edits.spec`. Source-level (comments stripped) and behavioural through the
+ * real view (`./practice-view-harness.ts`, `obsidian` mocked).
  */
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { EXPLAIN_BACK_DONE_LABEL, EXPLAIN_BACK_SUBMIT_LABEL } from '../../src/explain-back/copy.js';
+import type { ViewPracticeExplanationInput } from '../../src/explain-back/practice-record.js';
+import {
+  INSTRUMENT,
+  NOW,
+  retrieveFor,
+  submit,
+  type ViewInternals,
+} from './practice-view-harness.js';
+
+vi.mock('obsidian', async () => (await import('./practice-view-harness.js')).fakeObsidian());
+vi.mock('../../src/sprig/render-sprig.js', async () => {
+  const { FakeEl } = await import('./practice-view-harness.js');
+  return { renderSprig: () => new FakeEl('svg') };
+});
+
+// The first import of the view (and `olea-core` behind it) can outlast a test's own timeout on a
+// loaded machine; it is made once, here, so each test times only its own work.
+beforeAll(async () => {
+  await import('../../src/explain-back/modal.js');
+}, 120_000);
 
 const srcDir = fileURLToPath(new URL('../../src/', import.meta.url));
 
@@ -34,125 +51,63 @@ function codeOf(relativePath: string): string {
 
 const modal = codeOf('explain-back/modal.ts');
 
-describe('ExplainBackModal adds exactly one capture listener, on the answering textarea', () => {
-  it('renderAnsweringPhase adds exactly one input listener, and it is the only one in the file', () => {
-    const listeners = modal.match(/\.addEventListener\('input',/g) ?? [];
-    expect(listeners).toHaveLength(1);
+describe('v0.9: the view captures no answer-edit counts, because no review record carries them', () => {
+  it('no input listener, no first-edit time and no burst counter anywhere in the view', () => {
+    // The class body: the dormant review write's parameter type still declares the field.
+    const view = modal.slice(modal.indexOf('export class ExplainBackModal'));
+    expect(view).not.toMatch(/addEventListener\('input'/);
+    expect(view).not.toMatch(/firstEditAtMs|editBursts|firstEditMs|answerEdits/);
   });
 
-  it('the listener is attached inside renderAnsweringPhase, on the textarea it just created', () => {
-    const renderStart = modal.indexOf('private renderAnsweringPhase(');
-    const nextMethodStart = modal.indexOf('private ', renderStart + 1);
-    expect(renderStart).toBeGreaterThan(-1);
-    const body = modal.slice(renderStart, nextMethodStart);
-    expect(body).toMatch(/textarea\.addEventListener\('input', \(\) => \{/);
-  });
-
-  it('the listener never reads or captures textarea.value — it only times and counts (D-005)', () => {
-    const renderStart = modal.indexOf('private renderAnsweringPhase(');
-    const listenerStart = modal.indexOf("textarea.addEventListener('input',", renderStart);
-    const listenerEnd = modal.indexOf('});', listenerStart);
-    expect(listenerStart).toBeGreaterThan(-1);
-    const listenerBody = modal.slice(listenerStart, listenerEnd);
-    expect(listenerBody).not.toMatch(/textarea\.value/);
-  });
-});
-
-describe('ExplainBackModal counts burst 5: one straight-through composition is one burst, not an absent signal', () => {
-  it('the first input event of a fresh textarea increments this.editBursts exactly once, via a call-scoped flag', () => {
-    const renderStart = modal.indexOf('private renderAnsweringPhase(');
-    const nextMethodStart = modal.indexOf('private ', renderStart + 1);
-    const body = modal.slice(renderStart, nextMethodStart);
-    // A closure-local flag, freshly `false` every call — not a field on the
-    // textarea and not a module-level variable — is what stops a second,
-    // third, … keystroke in the SAME presentation from incrementing
-    // `editBursts` again (that would make it a keystroke count, the
-    // REJECTED option).
-    expect(body).toMatch(/let burstStarted = false;/);
-    expect(body).toMatch(
-      /if \(!burstStarted\) \{\s*burstStarted = true;\s*this\.editBursts \+= 1;\s*\}/,
-    );
-  });
-
-  it('editBursts starts at 0 on a fresh modal instance — absent-signal-distinct: 0 before any input, 1 after one', () => {
-    expect(modal).toMatch(/private editBursts = 0;/);
-  });
-
-  it('firstEditAtMs is stamped, through this.now(), on the first input event only', () => {
-    expect(modal).toMatch(
-      /if \(this\.firstEditAtMs === null\) this\.firstEditAtMs = this\.now\(\)\.getTime\(\);/,
-    );
+  it('the practice explanation she leaves carries no answerEdits', async () => {
+    const { ExplainBackModal } = await import('../../src/explain-back/modal.js');
+    const practice = vi.fn(async (_input: ViewPracticeExplanationInput) => ({
+      written: false as const,
+      record: {} as never,
+    }));
+    const view = new ExplainBackModal(
+      {} as never,
+      {
+        retrieveSourceBlocks: retrieveFor,
+        generateInstrumentId: () => 'attempt-1',
+        now: () => NOW,
+        recordPracticeExplanation: practice,
+      },
+      { kind: 'instrument', instrument: INSTRUMENT },
+    ) as unknown as ViewInternals;
+    view.onOpen();
+    await vi.waitFor(() => expect(view.state.phase).toBe('answering'));
+    submit(view.contentEl, 'An answer typed straight through.', EXPLAIN_BACK_SUBMIT_LABEL);
+    await vi.waitFor(() => expect(view.state.phase).toBe('passages'));
+    view.contentEl.button(EXPLAIN_BACK_DONE_LABEL).click();
+    await vi.waitFor(() => expect(practice).toHaveBeenCalledTimes(1));
+    expect(Object.keys(practice.mock.calls[0]?.[0] ?? {})).not.toContain('answerEdits');
   });
 });
 
-describe('ExplainBackModal counter 6: editBursts lives on the modal instance and survives a re-render', () => {
-  it('editBursts is a private instance field, never reset outside its own initializer', () => {
-    // Exactly one assignment site for `this.editBursts` in the whole file:
-    // the `+= 1` inside the input listener. If a second site ever set it
-    // back to 0 (e.g. alongside `presentedAtMs`'s reset at discard), the
-    // count would NOT survive a discard-and-retry re-render, which is
-    // exactly the bug this scenario guards against.
-    const assignments = modal.match(/this\.editBursts (\+=|=)/g) ?? [];
-    expect(assignments).toEqual(['this.editBursts +=']);
-  });
-
-  it('firstEditAtMs, unlike editBursts, IS reset alongside presentedAtMs — at all three re-stamp sites', () => {
-    // `firstEditMs` shares `durationMs`'s "this attempt" clock origin
-    // (`presentedAtMs`), so it resets everywhere `presentedAtMs` does:
-    // `resolveInstrumentPrompt`, `resolveTopicPrompt`, `discardGrading`.
-    const stamps = modal.match(/this\.presentedAtMs = this\.now\(\)\.getTime\(\);/g) ?? [];
-    const resets = modal.match(/this\.firstEditAtMs = null;/g) ?? [];
-    expect(stamps).toHaveLength(3);
-    expect(resets).toHaveLength(3);
-  });
-
-  it('answerEdits is sealed once, at submitAnswer, and carried through to recordSoloGradeAndReview unconditionally', () => {
-    expect(modal).toMatch(/const answerEdits: ModalAnswerEdits = \{/);
-    // Never conditionally spread (unlike `supportLevelShown`) — this field
-    // is always computable for a genuine submit through this view. Bare
-    // `answerEdits,` (not `answerEdits,\n\s*});`): `ol-egov.141.89.6.50`
-    // appended `sourceMaterial`/`relationExpected` after it, so this no
-    // longer has to be the LAST field, only present unconditionally.
-    expect(modal).toMatch(
-      /await this\.deps\.recordSoloGradeAndReview\(\{[\s\S]{0,900}?\n\s*answerEdits,\n/,
-    );
-  });
-
-  it('answerEdits is threaded through the grading and graded phases, and to acceptGrading on Accept', () => {
-    // `[D-416]` (`ol-egov.141.89.6.63`) added the sealed `support` after
-    // `answerEdits` on each of these three; the order up to it is unchanged.
-    expect(modal).toMatch(
-      /this\.state = \{ phase: 'grading', prompt, answer, durationMs, attemptId, answerEdits, support \};/,
-    );
-    expect(modal).toMatch(
-      /this\.state = \{\s*phase: 'graded',\s*prompt,\s*answer,\s*pending,\s*durationMs,\s*attemptId,\s*answerEdits,\s*support,?\s*\};/,
-    );
-    expect(modal).toMatch(
-      /this\.acceptGrading\(\s*prompt,\s*answer,\s*pending,\s*durationMs,\s*attemptId,\s*answerEdits,\s*support,?\s*\)/,
-    );
-  });
-});
-
-describe('ExplainBackModal counter 7: nothing about the count is ever rendered', () => {
-  it('editBursts and firstEditAtMs are never passed to a DOM-creating call anywhere in the file', () => {
-    // Every DOM-creating call in this file is `createEl`/`createDiv`/
-    // `createSpan`/`setText`/`appendChild` (Obsidian's `HTMLElement`
-    // helpers) — none of them may ever appear on the same statement as
-    // either capture field.
-    const domCreators = /\.(createEl|createDiv|createSpan|setText)\(/;
-    for (const line of modal.split('\n')) {
-      if (/editBursts|firstEditAtMs/.test(line)) {
-        expect(line).not.toMatch(domCreators);
-      }
-    }
-  });
-
-  it('the input listener body creates no DOM and renders nothing', () => {
-    const renderStart = modal.indexOf('private renderAnsweringPhase(');
-    const listenerStart = modal.indexOf("textarea.addEventListener('input',", renderStart);
-    const listenerEnd = modal.indexOf('});', listenerStart);
-    const listenerBody = modal.slice(listenerStart, listenerEnd);
-    expect(listenerBody).not.toMatch(/create(El|Div|Span)\(/);
-    expect(listenerBody).not.toMatch(/this\.render\(\)/);
+describe('nothing about the count is shown to her while she writes', () => {
+  it('the answering phase shows the question, the notice, the answer box and two controls, and no count, timer or composition feedback', async () => {
+    const { ExplainBackModal } = await import('../../src/explain-back/modal.js');
+    const view = new ExplainBackModal(
+      {} as never,
+      {
+        retrieveSourceBlocks: retrieveFor,
+        generateInstrumentId: () => 'attempt-1',
+        now: () => NOW,
+      },
+      { kind: 'instrument', instrument: INSTRUMENT },
+    ) as unknown as ViewInternals;
+    view.onOpen();
+    await vi.waitFor(() => expect(view.state.phase).toBe('answering'));
+    const [textarea] = view.contentEl.fields();
+    if (textarea === undefined) throw new Error('no answer box');
+    textarea.value = 'Partly typed';
+    view.render();
+    const texts = view.contentEl
+      .texts()
+      .filter((text) => text !== INSTRUMENT.courseCode && text !== INSTRUMENT.noteTitle);
+    expect(texts.join(' ')).not.toMatch(/\d/);
+    expect(texts.join(' ')).not.toMatch(/burst|edit|typed|seconds|timer/i);
+    expect(view.contentEl.buttons()).toHaveLength(2);
   });
 });

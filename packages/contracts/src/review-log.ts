@@ -2845,11 +2845,180 @@ export type ExplainBackFeedbackShownLogRecordV6 = z.infer<
 >;
 
 /**
+ * Which shape of explain-back prompt a practice explanation answered (D7.1,
+ * `[D-614]`): `concept` — *explain X* — or `relation` — *explain X, including
+ * how it relates to Y* (F2.21, F5.2a). The two shapes decide which supporting
+ * passages she is shown (F5.2a's cases) and which fixed reflection prompts sit
+ * beside them (F5.4, vocabulary registry §39), so the shape is recorded rather
+ * than re-derived from a graph that may have changed since. Internal
+ * vocabulary, never printed.
+ */
+export const explainBackPromptShape = z.enum(['concept', 'relation']);
+export type ExplainBackPromptShape = z.infer<typeof explainBackPromptShape>;
+
+/**
+ * The keys a result would arrive under — the names the review and set-aside
+ * records give a rating, a grade, a verdict, a depth or a correctness reading
+ * — each refused on a practice explanation rather than stripped: a line that
+ * carries one is invalid, never quietly read as practice. Present only as
+ * "must be absent"; no value of any of them parses.
+ */
+const refusedGradeKeys = {
+  rating: z.never().optional(),
+  grade: z.never().optional(),
+  explainBackGrade: z.never().optional(),
+  explainBackCorrectness: z.never().optional(),
+  correctness: z.never().optional(),
+  verdict: z.never().optional(),
+  outcome: z.never().optional(),
+  soloLevel: z.never().optional(),
+  depth: z.never().optional(),
+};
+
+/**
+ * `passageFingerprints` names passages she had been shown, so it rides only a
+ * record whose rung says passages had been shown (`'guided'`): a list beside
+ * `'independent'` or beside an unknown rung would contradict the rung.
+ */
+function refinePracticePassagesNeedShownSupport(
+  value: {
+    readonly supportLevelShown?: SupportLevel | undefined;
+    readonly passageFingerprints?: readonly string[] | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.passageFingerprints === undefined || value.supportLevelShown === 'guided') return;
+  ctx.addIssue({
+    code: 'custom',
+    path: ['passageFingerprints'],
+    message:
+      'passageFingerprints names passages she had been shown, so it rides only a guided ' +
+      'supportLevelShown ([D-614])',
+  });
+}
+
+/**
+ * The **practice explanation** (D7.1's practice-explanation paragraph,
+ * `[D-603]`, `[D-614]`, ruled 2026-10-23; `ol-egov.141.89.6.128`): in v0.9 an
+ * explanation she writes is ungraded practice, and each answer she saves —
+ * leaving it by "Done" or by "Try again" — is written once as this record.
+ * New at v6, additive to the v6 discriminated union the way
+ * `explainBackSetAsideLogRecordV6` and `explainBackFeedbackShownLogRecordV6`
+ * were: a new `kind` literal, no `schemaVersion` bump, no v5 form (no v5
+ * writer ever produced one).
+ *
+ * **Beside the review event, never one** (knowledge model §3, the review
+ * event row): it carries no result. There is no `rating`, grade, verdict,
+ * depth or correctness field, and a line carrying any of those keys is
+ * refused rather than stripped (`refusedGradeKeys`), so a grade can never
+ * ride in on this kind unnoticed.
+ *
+ * **What is recorded is D7.1's list**, each by a name an existing record
+ * already uses for the same thing:
+ * - **the concept** — `conceptIds`, as on the non-attempt record. Index 0 is
+ *   the concept she explained (the subject, as a review's index 0 is its
+ *   scored concept); a relation prompt's neighbour may follow as context.
+ *   Non-empty, for the non-attempt record's reason.
+ * - **the prompt shape** — `promptShape`, see `explainBackPromptShape`.
+ * - **the offer behind it** — `trigger`, the same four routes the offer and
+ *   non-attempt records carry, and `offerEventId`, the offer record's own
+ *   `eventId`, present exactly when a real offer stands behind the prompt and
+ *   refused on a self-initiated one (`[D-369]`'s rule, reused unchanged).
+ * - **how long it took** — `durationMs`, presented-to-submitted, `null` when
+ *   nothing timed it: the review and set-aside records' definition. F2.14a's
+ *   duration estimate reads it.
+ * - **the support actually shown** — which supporting passages she had been
+ *   shown, on this attempt or an earlier one, before she wrote it. Recorded
+ *   as F5.9 records the support a view showed, `supportLevelShown`, plus
+ *   which passages: `'guided'` when passages had been shown, `'independent'`
+ *   when none had, **absent when exposure could not be established** (F5.4,
+ *   `[D-460]`: uncertain, never guessed either way). `passageFingerprints`,
+ *   beside `'guided'` only, names the passages by digest in the digest space
+ *   `presentedPassageDigest` and `explainBackGradingProvenance.
+ *   passageFingerprints` already use — never their text. **Absent beside
+ *   `'guided'` means the coarser fact only**: her log records that this
+ *   prompt's passages had been shown on an earlier attempt (its `[D-460]`
+ *   marker names the question and the attempt, not the passages), so which
+ *   passages they were is not known, and none is guessed. "Try again" never
+ *   erases exposure: a later answer's record carries what was shown before
+ *   it (F5.4).
+ * - **the date** — `timestamp`, ISO-8601 with offset, the moment she left
+ *   the answer by "Done" or "Try again".
+ * - **her text** — `contentRef`, into the `[D-077]` content store
+ *   (`explainBackGrade.contentRef`'s meaning), so her text and its dated
+ *   history are kept. The text itself is never on this record.
+ *
+ * Plus the attempt's identity, `instrumentId` (the question) and `attemptId`
+ * (the attempt, minted when she submitted it) — the same two ids the set-aside
+ * record and the `[D-460]` marker carry, so a later attempt's record can read
+ * that marker as exposure on the same prompt, and so the writer is idempotent
+ * on the attempt: reopening or reloading the view writes no second record.
+ *
+ * **One shape addition beyond D7.1's list: `localCheckFlagged`.** D7.1 counts
+ * only a *genuine* practice explanation as study activity — not an answer
+ * the declared local check flagged (F5.7, `[D-304]`) — and no existing record
+ * lets a reader tell from the log that an answer was flagged. `true` when the
+ * check flagged this answer; absent when it did not, or when no check ran (no
+ * such check is built yet, so every record written today carries none). One
+ * literal, so the one fact has one encoding. Read by the study-activity
+ * readings and the per-offer counting, and by nothing that reports what she
+ * knows (`[D-304]`).
+ *
+ * **Study activity, never evidence** (D7.1, F5.5): a genuine one may count
+ * wherever Olea reads that she studied; none counts in the evidence fold,
+ * the misconception projection, readiness, the growth stage, vitality or
+ * scheduling. Exclusion is by those folds reading `kind: 'review'` only, the
+ * mechanism the set-aside and marker kinds already rely on; olea-core's
+ * `review-log/practice-explanation-not-evidence.spec.ts` holds it.
+ *
+ * **No content, per D-005**: opaque ids, two enums, one number, digests and a
+ * content-store pointer. `'practice-explanation'` is internal vocabulary and
+ * is never printed.
+ */
+export const practiceExplanationLogRecordV6 = z
+  .object({
+    schemaVersion: z.literal(6),
+    /** Discriminator. Required, never defaulted — see `reviewLogRecordV2`'s doc. */
+    kind: z.literal('practice-explanation'),
+    /** Stable unique id; makes two-device merges idempotent. */
+    eventId: z.string().min(1),
+    /** ISO-8601 with offset, the moment she left the answer by "Done" or "Try again" (D7.1's date). */
+    timestamp: z.string().datetime({ offset: true }),
+    /** The question the answer answered: the id the `[D-460]` marker and the set-aside record carry. */
+    instrumentId: z.string().min(1),
+    /** This answer's own attempt id, minted when she submitted it; the writer is idempotent on it. */
+    attemptId: z.string().min(1),
+    /** The concept she explained at index 0; a relation prompt's neighbour may follow. Non-empty. */
+    conceptIds: z.array(z.string().min(1)).min(1),
+    /** A concept prompt or a relation prompt — see `explainBackPromptShape`. */
+    promptShape: explainBackPromptShape,
+    /** The trigger the offer behind this prompt was made under (D7.1). */
+    trigger: explainBackOfferTrigger,
+    /** The `explain-back-offered` record behind this prompt (`[D-369]`); absent for a self-initiated one. */
+    offerEventId: z.string().min(1).optional(),
+    /** Presented-to-submitted milliseconds, `null` when nothing timed it — the review record's definition. */
+    durationMs: z.number().int().nonnegative().nullable(),
+    /** `'guided'`: passages had been shown before she wrote it; `'independent'`: none had; absent: unknown. */
+    supportLevelShown: supportLevel.optional(),
+    /** Digests of the passages shown before she wrote it, beside `'guided'` only; absent when they cannot be named. */
+    passageFingerprints: z.array(z.string().min(1)).min(1).optional(),
+    /** Her text, in the `[D-077]` content store. Never inline. */
+    contentRef: z.string().min(1),
+    /** `true` when the declared local check flagged the answer (F5.7, `[D-304]`); absent otherwise. */
+    localCheckFlagged: z.literal(true).optional(),
+    ...refusedGradeKeys,
+  })
+  .superRefine(refineNonAttemptOfferReference)
+  .superRefine(refinePracticePassagesNeedShownSupport);
+export type PracticeExplanationLogRecordV6 = z.infer<typeof practiceExplanationLogRecordV6>;
+
+/**
  * Every shape a **v6** review-log line can take, discriminated by `kind` —
  * the same ten members as `reviewLogEntryV5`, each at version 6, plus the
- * v6-only `explain-back-set-aside` (`[D-416]`) and
- * `explain-back-feedback-shown` (`[D-460]`), and the union readers parse
- * current lines against (`reviewLogEntry`).
+ * v6-only `explain-back-set-aside` (`[D-416]`),
+ * `explain-back-feedback-shown` (`[D-460]`) and `practice-explanation`
+ * (`[D-614]`), and the union readers parse current lines against
+ * (`reviewLogEntry`).
  */
 export const reviewLogEntryV6 = z.discriminatedUnion('kind', [
   reviewLogRecordV6,
@@ -2864,6 +3033,7 @@ export const reviewLogEntryV6 = z.discriminatedUnion('kind', [
   sourceRegisteredLogRecordV6,
   explainBackSetAsideLogRecordV6,
   explainBackFeedbackShownLogRecordV6,
+  practiceExplanationLogRecordV6,
 ]);
 export type ReviewLogEntryV6 = z.infer<typeof reviewLogEntryV6>;
 
@@ -2898,6 +3068,8 @@ export const explainBackSetAsideLogRecord = explainBackSetAsideLogRecordV6;
 export type ExplainBackSetAsideLogRecord = z.infer<typeof explainBackSetAsideLogRecordV6>;
 export const explainBackFeedbackShownLogRecord = explainBackFeedbackShownLogRecordV6;
 export type ExplainBackFeedbackShownLogRecord = z.infer<typeof explainBackFeedbackShownLogRecordV6>;
+export const practiceExplanationLogRecord = practiceExplanationLogRecordV6;
+export type PracticeExplanationLogRecord = z.infer<typeof practiceExplanationLogRecordV6>;
 
 /** Current schema version, for writers stamping new records. */
 export const REVIEW_LOG_SCHEMA_VERSION = 6 as const;

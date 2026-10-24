@@ -61,6 +61,10 @@
  * corrected simply cannot be seen here, the identical honest-absence
  * posture, never a fabricated "definitely upheld."
  *
+ * **`[D-603]`/`[D-614]` (v0.9):** no row carries a depth reading, and every
+ * saved practice explanation (`practiceExplanationHistoryByInstrument`) is
+ * listed beside the graded attempts, by date, with no reading of any kind.
+ *
  * Only an INSTRUMENT-SEEDED explain-back attempt gets a row here — see
  * `RegistryInstrumentSummary.explainBackHistory`'s own doc in `./types.ts`
  * for why a freeform/topic-seeded attempt (no real vault instrument to
@@ -102,8 +106,8 @@ import { projectInstrumentValidity } from '../mastery/validity.js';
 import type { CourseOracleRanking } from '../oracle/types.js';
 import { quarantinedGradeInstrumentIds } from '../review-log/contest.js';
 import {
-  type ExplainBackHistoryEntry,
   explainBackGradeHistoryByInstrument,
+  practiceExplanationHistoryByInstrument,
 } from '../review-log/explain-back-history.js';
 import { creditsConcept } from '../session/scored-concept.js';
 import { aliasesFor, isConceptPruned, resolvedDisplayName } from './overrides.js';
@@ -166,36 +170,61 @@ function instrumentSourceLocations(
 }
 
 /**
- * F8.4b's per-instrument explain-back history row set — oldest first,
- * exactly `explainBackGradeHistoryByInstrument`'s own order, with the
- * `[D-095]` contested marker overlaid on the CURRENT (non-superseded) row
- * only. An older, already-superseded attempt never carries the marker even
- * if it was disputed once: `quarantinedGradeInstrumentIds` already applies
- * `[D-095]`'s evidence-relative aging (a dispute retires once the claim it
- * rode recomputes on new evidence), so the only grade that CAN be presently
- * quarantined is the instrument's current standing one — the same reading
- * GLOSSARY's SOLO rule 3 gives depth ("the MOST RECENT graded explain-back")
- * applied to contest state instead of to the fold.
+ * F8.4b's per-instrument explain-back history row sets — every graded attempt
+ * (no depth reading on the row, `[D-603]`) and every saved practice
+ * explanation (`[D-614]`), one list per instrument, oldest first by
+ * `(instant, eventId)`. The `[D-095]` contested marker is overlaid on the
+ * CURRENT (non-superseded) graded row only: an older, already-superseded
+ * attempt never carries it even if it was disputed once —
+ * `quarantinedGradeInstrumentIds` already applies `[D-095]`'s evidence-relative
+ * aging, so the only grade that CAN be presently quarantined is the
+ * instrument's current standing one. A practice row is never contested:
+ * nothing about it was graded, so there was nothing to dispute.
  */
-function explainBackHistoryFor(
-  historyByInstrument: ReadonlyMap<string, readonly ExplainBackHistoryEntry[]>,
+function explainBackHistoryRows(
+  entries: BuildRegistryModelInput['entries'],
   quarantinedInstrumentIds: ReadonlySet<string>,
-  instrumentId: string,
-): readonly RegistryExplainBackHistoryRow[] {
-  const entries = historyByInstrument.get(instrumentId) ?? [];
-  return entries.map((entry) => ({
-    eventId: entry.eventId,
-    timestamp: entry.timestamp,
-    soloLevel: entry.soloLevel,
-    contested: !entry.superseded && quarantinedInstrumentIds.has(instrumentId),
-  }));
+): ReadonlyMap<string, readonly RegistryExplainBackHistoryRow[]> {
+  const rows = new Map<string, RegistryExplainBackHistoryRow[]>();
+  for (const [instrumentId, graded] of explainBackGradeHistoryByInstrument(entries)) {
+    rows.set(
+      instrumentId,
+      graded.map((entry) => ({
+        kind: 'graded' as const,
+        eventId: entry.eventId,
+        timestamp: entry.timestamp,
+        contested: !entry.superseded && quarantinedInstrumentIds.has(instrumentId),
+      })),
+    );
+  }
+  for (const [instrumentId, practice] of practiceExplanationHistoryByInstrument(entries)) {
+    const list = rows.get(instrumentId) ?? [];
+    for (const entry of practice) {
+      list.push({
+        kind: 'practice' as const,
+        eventId: entry.eventId,
+        timestamp: entry.timestamp,
+        contested: false,
+        contentRef: entry.contentRef,
+      });
+    }
+    rows.set(instrumentId, list);
+  }
+  for (const list of rows.values()) {
+    list.sort((a, b) => {
+      const instantA = Date.parse(a.timestamp);
+      const instantB = Date.parse(b.timestamp);
+      if (instantA !== instantB) return instantA - instantB;
+      return a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0;
+    });
+  }
+  return rows;
 }
 
 function instrumentSummary(
   record: BuildRegistryModelInput['instrumentRecords'][number],
   suspended: ReadonlySet<string>,
-  explainBackHistoryByInstrument: ReadonlyMap<string, readonly ExplainBackHistoryEntry[]>,
-  quarantinedInstrumentIds: ReadonlySet<string>,
+  explainBackHistoryByInstrument: ReadonlyMap<string, readonly RegistryExplainBackHistoryRow[]>,
 ): RegistryInstrumentSummary {
   return {
     instrumentId: record.instrumentId,
@@ -206,11 +235,7 @@ function instrumentSummary(
     blockId: record.blockId,
     heading: record.heading,
     sourceLocations: instrumentSourceLocations(record),
-    explainBackHistory: explainBackHistoryFor(
-      explainBackHistoryByInstrument,
-      quarantinedInstrumentIds,
-      record.instrumentId,
-    ),
+    explainBackHistory: explainBackHistoryByInstrument.get(record.instrumentId) ?? [],
     pruned: suspended.has(record.instrumentId),
   };
 }
@@ -264,17 +289,11 @@ function conceptSourceLocations(
 function groupInstrumentsByConcept(
   instrumentRecords: BuildRegistryModelInput['instrumentRecords'],
   suspended: ReadonlySet<string>,
-  explainBackHistoryByInstrument: ReadonlyMap<string, readonly ExplainBackHistoryEntry[]>,
-  quarantinedInstrumentIds: ReadonlySet<string>,
+  explainBackHistoryByInstrument: ReadonlyMap<string, readonly RegistryExplainBackHistoryRow[]>,
 ): ReadonlyMap<string, RegistryInstrumentSummary[]> {
   const byConcept = new Map<string, RegistryInstrumentSummary[]>();
   for (const record of instrumentRecords) {
-    const summary = instrumentSummary(
-      record,
-      suspended,
-      explainBackHistoryByInstrument,
-      quarantinedInstrumentIds,
-    );
+    const summary = instrumentSummary(record, suspended, explainBackHistoryByInstrument);
     for (const conceptId of record.conceptIds) {
       const bucket = byConcept.get(conceptId);
       if (bucket === undefined) byConcept.set(conceptId, [summary]);
@@ -505,14 +524,16 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
     return true;
   });
 
-  const explainBackHistoryByInstrument = explainBackGradeHistoryByInstrument(input.entries);
   const quarantinedInstrumentIds = new Set(quarantinedGradeInstrumentIds(input.disputes ?? []));
+  const explainBackHistoryByInstrument = explainBackHistoryRows(
+    input.entries,
+    quarantinedInstrumentIds,
+  );
 
   const instrumentsByConcept = groupInstrumentsByConcept(
     input.instrumentRecords,
     input.suspendedInstrumentIds,
     explainBackHistoryByInstrument,
-    quarantinedInstrumentIds,
   );
   const instrumentRecordsByConcept = groupInstrumentRecordsByConcept(input.instrumentRecords);
   const courseRankingsByCourse = new Map(

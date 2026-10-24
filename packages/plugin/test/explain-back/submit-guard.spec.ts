@@ -1,24 +1,38 @@
 /**
- * `ol-0r92.98`: an empty or whitespace-only explain-back submit must produce
- * no grading call and no assessment. `modal.ts` extends Obsidian's `Modal`,
- * and `obsidian`'s `package.json` `main` is `""`, so the module cannot be
- * IMPORTED under Vitest at all (confirmed: `import`-ing it fails resolving
- * `obsidian`) — the same documented constraint `modal-duration.spec.ts` and
- * `modal-refusal.spec.ts` already work around by asserting against source
- * text instead. This file follows the same technique: it extracts the
- * exported `isBlankExplainBackAnswer` guard's own function body as text and
- * evaluates that text directly (never `import`-ing the module), so the
- * blank/not-blank behaviour below is asserted against the guard's actual
- * logic, not a hand-written duplicate of it. A second block then checks,
- * structurally, that the submit button's click handler calls this same
- * guard and returns before ever reaching `submitAnswer` — the only path to
- * `deps.grade` in this file — so a click with a blank answer reaches
- * `deps.grade` zero times.
+ * `ol-0r92.98`, as the v0.9 view has it (`[D-603]`, `ol-egov.141.89.6.129`): an empty or
+ * whitespace-only "Show the passages" is a no-op. The passages are not shown, and no exposure
+ * marker and no practice explanation is written, so an empty submit is never a way to read the
+ * passages without explaining first (F5.2). It mirrors the topic phase's own emptiness guard and
+ * is deliberately NOT the named skip (`[DOS-I9]`, SKIP-2/3/4): it writes no event of any kind.
+ *
+ * Scenario: `features/F5-explain-it-back.md` (olea-service), "an empty or whitespace-only submit
+ * is a no-op: no passages and no practice entry" (`submit-guard.spec`).
+ *
+ * The predicate is extracted from `modal.ts`'s own source and run for real; the wiring is then
+ * checked behaviourally through the real view (`./practice-view-harness.ts`, `obsidian` mocked)
+ * and structurally against the comment-stripped source.
  */
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  EXPLAIN_BACK_PASSAGES_HEADING,
+  EXPLAIN_BACK_SUBMIT_LABEL,
+} from '../../src/explain-back/copy.js';
+import { INSTRUMENT, NOW, retrieveFor, type ViewInternals } from './practice-view-harness.js';
+
+vi.mock('obsidian', async () => (await import('./practice-view-harness.js')).fakeObsidian());
+vi.mock('../../src/sprig/render-sprig.js', async () => {
+  const { FakeEl } = await import('./practice-view-harness.js');
+  return { renderSprig: () => new FakeEl('svg') };
+});
+
+// The first import of the view (and `olea-core` behind it) can outlast a test's own timeout on a
+// loaded machine; it is made once, here, so each test times only its own work.
+beforeAll(async () => {
+  await import('../../src/explain-back/modal.js');
+}, 120_000);
 
 const srcDir = fileURLToPath(new URL('../../src/', import.meta.url));
 
@@ -31,11 +45,7 @@ function codeOf(relativePath: string): string {
 
 const modal = codeOf('explain-back/modal.ts');
 
-/**
- * Extracts `isBlankExplainBackAnswer`'s own source and evaluates it as a
- * standalone function — the guard's real logic, run for real, without
- * importing the `obsidian`-dependent module it lives in.
- */
+/** `isBlankExplainBackAnswer`'s own source, evaluated as a standalone function. */
 function extractIsBlankExplainBackAnswer(): (answer: string) => boolean {
   const start = modal.indexOf('export function isBlankExplainBackAnswer');
   expect(start).toBeGreaterThan(-1);
@@ -52,58 +62,83 @@ function extractIsBlankExplainBackAnswer(): (answer: string) => boolean {
 describe('isBlankExplainBackAnswer — the submit guard predicate, run for real from its own source', () => {
   const isBlank = extractIsBlankExplainBackAnswer();
 
-  it.each(['', '   ', '\n', '\t\t', ' \n \t '])(
-    'treats %j as blank: a submit of it must call deps.grade zero times',
-    (blank) => {
-      expect(isBlank(blank)).toBe(true);
-    },
-  );
+  it.each(['', '   ', '\n', '\t\t', ' \n \t '])('treats %j as blank', (blank) => {
+    expect(isBlank(blank)).toBe(true);
+  });
 
   it.each(['x', ' a real answer ', 'a\nmulti-line answer'])('treats %j as not blank', (answer) => {
     expect(isBlank(answer)).toBe(false);
   });
 });
 
+describe('an empty or whitespace-only "Show the passages" is a no-op: no passages and no practice entry', () => {
+  it.each(['', '   ', '\n', '\t'])(
+    'choosing it with %j shows nothing and writes nothing',
+    async (blank) => {
+      const { ExplainBackModal } = await import('../../src/explain-back/modal.js');
+      const marker = vi.fn(async () => {});
+      const practice = vi.fn();
+      const nonAttempt = vi.fn(async () => {});
+      const view = new ExplainBackModal(
+        {} as never,
+        {
+          retrieveSourceBlocks: retrieveFor,
+          generateInstrumentId: () => 'attempt-1',
+          now: () => NOW,
+          recordFeedbackShown: marker,
+          recordPracticeExplanation: practice,
+          recordNonAttempt: nonAttempt,
+        },
+        { kind: 'instrument', instrument: INSTRUMENT },
+      ) as unknown as ViewInternals;
+      view.onOpen();
+      await vi.waitFor(() => expect(view.state.phase).toBe('answering'));
+
+      const [textarea] = view.contentEl.fields();
+      if (textarea === undefined) throw new Error('no answer box');
+      textarea.value = blank;
+      view.contentEl.button(EXPLAIN_BACK_SUBMIT_LABEL).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(view.state.phase).toBe('answering');
+      expect(view.contentEl.texts()).not.toContain(EXPLAIN_BACK_PASSAGES_HEADING);
+      expect(marker).not.toHaveBeenCalled();
+      expect(practice).not.toHaveBeenCalled();
+      // Not a skip: no non-attempt event either.
+      expect(nonAttempt).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe('ExplainBackModal — the submit button guard is actually wired in', () => {
   it("renderAnsweringPhase's submit button returns on a blank answer before ever calling submitAnswer", () => {
     const start = modal.indexOf('private renderAnsweringPhase(');
-    const end = modal.indexOf('private renderGradedPhase(');
+    const end = modal.indexOf('private renderExplanation(');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
-    const body = modal.slice(start, end);
-    expect(body).toMatch(
+    expect(modal.slice(start, end)).toMatch(
       /if \(isBlankExplainBackAnswer\(textarea\.value\)\) return;\s*void this\.submitAnswer\(prompt, textarea\.value\);/,
     );
   });
 
-  it('submitAnswer is the only path to deps.grade in this file, so the guard above is the only thing standing between a click and a grading call', () => {
-    const calls = modal.match(/this\.deps\.grade\(/g) ?? [];
-    expect(calls).toHaveLength(1);
-    const submitAnswerBody = modal.slice(
+  it('submitAnswer is the only path to the passages and to the marker, so the guard stands before both', () => {
+    expect(modal.match(/this\.state = \{ phase: 'passages'/g)).toHaveLength(1);
+    expect(modal.match(/this\.recordFeedbackShownBeforeDisplay\(/g)).toHaveLength(1);
+    const submitBody = modal.slice(
       modal.indexOf('private async submitAnswer('),
-      modal.indexOf('private async acceptGrading('),
+      modal.indexOf('private async recordFeedbackShownBeforeDisplay('),
     );
-    expect(submitAnswerBody).toMatch(/this\.deps\.grade\(/);
+    expect(submitBody).toMatch(/this\.state = \{ phase: 'passages'/);
+    expect(submitBody).toMatch(/this\.recordFeedbackShownBeforeDisplay\(/);
   });
 
   it('the empty-submit guard is not the explicit skip action — the guard itself introduces no skip event', () => {
-    // `ol-0r92.104` [DOS-I9] added the real named skip action to this same
-    // file, so `modal` now legitimately contains "skip" — this test's job
-    // narrows from "the word never appears" to "the guard's own click
-    // handler is not where it appears": the guard returns before
-    // `submitAnswer` and touches neither `skipPrompt` nor
-    // `deps.recordNonAttempt`, so a blank submit still writes no event of
-    // any kind, named-skip or otherwise. See `skip-wiring.spec.ts` for the
-    // skip action's own, separately-wired tests.
-    const guardLine = modal.match(/if \(isBlankExplainBackAnswer\(textarea\.value\)\) return;/);
-    expect(guardLine).not.toBeNull();
     const start = modal.indexOf('private renderAnsweringPhase(');
-    const end = modal.indexOf('private renderGradedPhase(');
+    const end = modal.indexOf('private renderExplanation(');
     const body = modal.slice(start, end);
     const guardBlockStart = body.indexOf("button.addEventListener('click', () => {");
     expect(guardBlockStart).toBeGreaterThan(-1);
     const guardBlockEnd = body.indexOf('});', guardBlockStart) + 3;
-    const guardBlock = body.slice(guardBlockStart, guardBlockEnd);
-    expect(guardBlock).not.toMatch(/skip/i);
+    expect(body.slice(guardBlockStart, guardBlockEnd)).not.toMatch(/skip/i);
   });
 });

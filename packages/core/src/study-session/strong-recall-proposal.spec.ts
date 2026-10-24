@@ -104,40 +104,122 @@ describe('evaluateStrongRecallProposal — F2.21', () => {
     expect(cleared.reason.strongRecallDays).toBe(6);
   });
 
-  it('is silent when depth evidence is present — a graded explain-back that fell short still counts', () => {
-    const shortOfTheGate = evaluateStrongRecallProposal(
+  it('reads no verdict: a graded explain-back count or a cleared depth gate on the evidence changes nothing (D-603, D-613)', () => {
+    const without = evaluateStrongRecallProposal(input());
+    const withVerdictFields = evaluateStrongRecallProposal(
       input({
         evidence: evidence({
-          gradedExplainBackCount: 1,
+          gradedExplainBackCount: 2,
           deepestSoloLevel: 'multistructural',
-          depthGateCleared: false,
+          depthGateCleared: true,
         }),
       }),
     );
-    expect(shortOfTheGate).toEqual({ shouldPropose: false, because: 'depth-evidence-present' });
-    const cleared = evaluateStrongRecallProposal(
-      input({ state: 'tree', evidence: evidence({ depthGateCleared: true }) }),
-    );
-    expect(cleared).toEqual({ shouldPropose: false, because: 'depth-evidence-present' });
+    expect(withVerdictFields).toEqual(without);
+    expect(without.shouldPropose).toBe(true);
   });
 
-  it('reopens eligibility when a fresh misconception surfaces on a top-stage concept', () => {
+  it('a concept already at the top stage is silent without the reopening fact', () => {
     const decision = evaluateStrongRecallProposal(
+      input({ state: 'tree', evidence: evidence({ depthGateCleared: true }) }),
+    );
+    expect(decision).toEqual({ shouldPropose: false, because: 'depth-evidence-present' });
+  });
+
+  it('a fresh misconception never reopens the offer in v0.9, where no concept is at the top stage', () => {
+    // Below strong recall: the misconception fact adds nothing.
+    const notStrong = evaluateStrongRecallProposal(
       input({
-        state: 'tree',
-        evidence: evidence({
-          gradedExplainBackCount: 1,
-          deepestSoloLevel: 'relational',
-          depthGateCleared: true,
-        }),
+        evidence: evidence({ successfulScoredDays: MIN_SPACED_RETRIEVAL_DAYS }),
         misconceptionSinceLastGradedExplainBack: true,
       }),
     );
-    expect(decision.shouldPropose).toBe(true);
+    expect(notStrong).toEqual({ shouldPropose: false, because: 'recall-not-yet-strong' });
+    // Strong recall: the offer is the ordinary one, never the reopening kind.
+    const strong = evaluateStrongRecallProposal(
+      input({ misconceptionSinceLastGradedExplainBack: true }),
+    );
+    if (!strong.shouldPropose) throw new Error('unreachable');
+    expect(strong.reason.kind).toBe('strong-recall');
+    // Seed and sprout are as silent with it as without it.
+    for (const state of ['seed', 'sprout'] as const) {
+      expect(
+        evaluateStrongRecallProposal(
+          input({ state, misconceptionSinceLastGradedExplainBack: true }),
+        ),
+      ).toEqual({ shouldPropose: false, because: 'stage-below-sapling' });
+    }
+  });
+
+  it('a failed application probe reopens nothing in v0.9: the decision has no input for one, and no concept is at the top stage (D-263)', () => {
+    const keys = Object.keys(input());
+    expect(keys).not.toContain('applicationProbeFailed');
+    // Evaluated on the v0.9 shape (sapling), the strong-recall answer is the plain one.
+    const decision = evaluateStrongRecallProposal(
+      input({ evidence: evidence({ successfulScoredDays: 0 }) }),
+    );
+    expect(decision).toEqual({ shouldPropose: false, because: 'recall-not-yet-strong' });
+  });
+
+  it('the reopening branch is kept for the graded path, dormant: it is reachable only from a top-stage concept', () => {
+    const decision = evaluateStrongRecallProposal(
+      input({
+        state: 'tree',
+        evidence: evidence({ depthGateCleared: true }),
+        misconceptionSinceLastGradedExplainBack: true,
+      }),
+    );
+    expect(decision.shouldPropose && decision.reason.kind).toBe('reopened-by-misconception');
+  });
+
+  it('a genuine completed practice explanation suppresses the offer (D-613 (b))', () => {
+    const decision = evaluateStrongRecallProposal(
+      input({ completedPracticeExplanation: { successfulScoredDaysSince: 0 } }),
+    );
+    expect(decision).toEqual({ shouldPropose: false, because: 'practice-explanation-completed' });
+  });
+
+  it('after a completion, recall before it never counts, however many days came before', () => {
+    // The whole-log count is large; only the count since the completion is read.
+    const decision = evaluateStrongRecallProposal(
+      input({
+        evidence: evidence({ successfulScoredDays: 40 }),
+        completedPracticeExplanation: { successfulScoredDaysSince: STRONG_DAYS - 1 },
+      }),
+    );
+    expect(decision).toEqual({ shouldPropose: false, because: 'practice-explanation-completed' });
+  });
+
+  it('after a completion, recall on spaced days after it meets the same threshold again, with no new constant', () => {
+    const decision = evaluateStrongRecallProposal(
+      input({
+        evidence: evidence({ successfulScoredDays: STRONG_DAYS + 3 }),
+        completedPracticeExplanation: { successfulScoredDaysSince: STRONG_DAYS },
+      }),
+    );
     if (!decision.shouldPropose) throw new Error('unreachable');
-    expect(decision.reason.kind).toBe('reopened-by-misconception');
-    // The stage is a high-water mark and nothing here writes: F2.11 is untouched.
-    expect(decision.promptText).toContain('explain it back?');
+    expect(decision.reason.successfulScoredDays).toBe(STRONG_DAYS);
+    expect(decision.reason.strongRecallDays).toBe(STRONG_DAYS);
+    // The threshold still rides a caller-supplied spacing gate.
+    const custom = evaluateStrongRecallProposal(
+      input({
+        minSpacedRetrievalDays: 5,
+        completedPracticeExplanation: { successfulScoredDaysSince: 5 },
+      }),
+    );
+    expect(custom.shouldPropose).toBe(false);
+    const customCleared = evaluateStrongRecallProposal(
+      input({
+        minSpacedRetrievalDays: 5,
+        completedPracticeExplanation: { successfulScoredDaysSince: 6 },
+      }),
+    );
+    expect(customCleared.shouldPropose).toBe(true);
+  });
+
+  it('with no completed practice explanation passed (a non-attempt or a flagged answer leaves none), the offer stands', () => {
+    // Both leave the input exactly as a never-explained concept's: the caller passes nothing.
+    expect(evaluateStrongRecallProposal(input()).shouldPropose).toBe(true);
   });
 
   it('declining changes nothing: the same input evaluates the same way afterwards', () => {

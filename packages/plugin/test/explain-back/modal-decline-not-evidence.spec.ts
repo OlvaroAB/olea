@@ -1,49 +1,49 @@
 /**
- * `[D-564]` (c) condition 2 (`ol-egov.141.89.6.113`): no decline is evidence, whichever kind. For
- * each of the three kinds, through the view's own `submitAnswer`, the unable-to-assess render and
- * `discardGrading`: no verdict, attainment or review is recorded, no misconception is observed,
- * the depth pass never runs, and the only write is the set-aside record, which carries no verdict.
- * Scenario: `features/F5-explain-it-back.md` (olea-service), "no decline is evidence".
+ * `[D-564]` (c) condition 2 (`ol-egov.141.89.6.113`): no decline is evidence, whichever kind. As
+ * v0.9 has it (`[D-603]`, `ol-egov.141.89.6.129`) no answer goes to grading, so no decline can
+ * reach the view at all: a judge standing ready to decline every kind is never asked, the view
+ * shows none of the decline messages, and her answer is the practice it is — no verdict, no
+ * attainment, no review, no misconception, no depth pass and no set-aside record. The message
+ * each kind would get stays `./decline-kind.ts`'s, checked here as the function it is, for when
+ * grading returns (the F5 heading note).
  *
- * `modal.ts` cannot load real Obsidian under Vitest, so this stands in for it exactly as
- * `modal-feedback-shown-marker.spec.ts` does. Structural placeholders throughout (INV-3).
+ * Scenario: `features/F5-explain-it-back.md` (olea-service), "no decline is evidence, whichever
+ * kind it is" (dormant in v0.9). The view renders for real into `./practice-view-harness.ts`'s
+ * stand-in (`obsidian` mocked). Structural placeholders throughout (INV-3).
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SealedAttemptSupport } from '../../src/explain-back/attempt-sequence.js';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   EXPLAIN_BACK_DECLINED_DEFECTIVE_QUESTION_MESSAGE,
   EXPLAIN_BACK_DECLINED_INSUFFICIENT_MATERIAL_MESSAGE,
-  EXPLAIN_BACK_DISCARD_LABEL,
+  EXPLAIN_BACK_DONE_LABEL,
+  EXPLAIN_BACK_SUBMIT_LABEL,
   EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
 } from '../../src/explain-back/copy.js';
-import type { ExplainBackDeclineKind } from '../../src/explain-back/decline-kind.js';
+import {
+  declineKindOf,
+  declineMessageFor,
+  type ExplainBackDeclineKind,
+} from '../../src/explain-back/decline-kind.js';
+import {
+  INSTRUMENT,
+  NOW,
+  retrieveFor,
+  submit,
+  type ViewInternals,
+} from './practice-view-harness.js';
 
-vi.mock('obsidian', () => ({
-  Modal: class {
-    contentEl = { empty: () => {} };
-    titleEl = {};
-    constructor(readonly app: unknown) {}
-  },
-}));
-vi.mock('../../src/registry/obsidian-ports.js', () => ({ openRegistryEntryFor: () => {} }));
-vi.mock('../../src/sprig/render-sprig.js', () => ({ renderSprig: () => {} }));
+vi.mock('obsidian', async () => (await import('./practice-view-harness.js')).fakeObsidian());
+vi.mock('../../src/sprig/render-sprig.js', async () => {
+  const { FakeEl } = await import('./practice-view-harness.js');
+  return { renderSprig: () => new FakeEl('svg') };
+});
 
-const NOW = new Date('2026-10-21T10:00:00Z');
-const INSTRUMENT = 'instrument-1';
-
-const PROMPT = {
-  context: {
-    question: 'Why does X happen?',
-    referenceAnswer: 'Because Y drives Z.',
-    sourceBlocks: [],
-    misconceptionDigest: [],
-  },
-  subjectConceptId: 'concept-1',
-  originInstrumentId: INSTRUMENT,
-  conceptIds: ['concept-1'],
-  sourceBlocks: [],
-};
+// The first import of the view (and `olea-core` behind it) can outlast a test's own timeout on a
+// loaded machine; it is made once, here, so each test times only its own work.
+beforeAll(async () => {
+  await import('../../src/explain-back/modal.js');
+}, 120_000);
 
 const CASES: readonly {
   readonly kind: ExplainBackDeclineKind;
@@ -64,150 +64,62 @@ const CASES: readonly {
   },
 ];
 
-interface Internals {
-  state: { phase: string; pending?: unknown; attemptId?: string; support?: SealedAttemptSupport };
-  render: () => void;
-  submitAnswer: (prompt: unknown, answer: string) => Promise<void>;
-  renderUnableToAssessPhase: (
-    root: unknown,
-    prompt: unknown,
-    answer: string,
-    pending: unknown,
-    durationMs: number | null,
-    attemptId: string,
-    support: SealedAttemptSupport,
-  ) => void;
-}
+const ALL_DECLINE_MESSAGES = [...new Set(CASES.map((c) => c.message))];
 
-interface FakeEl {
-  readonly kind: string;
-  readonly text: string;
-  readonly children: FakeEl[];
-  readonly handlers: Record<string, () => void>;
-  createEl: (tag: string, opts?: { text?: string }) => FakeEl;
-  createDiv: (opts?: { text?: string }) => FakeEl;
-  addEventListener: (name: string, handler: () => void) => void;
-}
-
-function fakeEl(kind: string, text = ''): FakeEl {
-  const el: FakeEl = {
-    kind,
-    text,
-    children: [],
-    handlers: {},
-    createEl(tag, opts) {
-      const child = fakeEl(tag, opts?.text ?? '');
-      el.children.push(child);
-      return child;
-    },
-    createDiv(opts) {
-      const child = fakeEl('div', opts?.text ?? '');
-      el.children.push(child);
-      return child;
-    },
-    addEventListener(name, handler) {
-      el.handlers[name] = handler;
-    },
-  };
-  return el;
-}
-
-function flatten(el: FakeEl): FakeEl[] {
-  return [el, ...el.children.flatMap(flatten)];
-}
-
-async function openDecliningView(reason: string | undefined) {
-  const { ExplainBackModal } = await import('../../src/explain-back/modal.js');
-  const pending = {
-    grading: { outcome: 'unable-to-assess', ...(reason !== undefined ? { reason } : {}) },
-  };
-  const writes = {
-    acceptWithObservation: vi.fn(),
-    recordSoloGradeAndReview: vi.fn(),
-    recordSetAsideAttempt: vi.fn(async () => {}),
-    recordFeedbackShown: vi.fn(async () => {}),
-    recordNonAttempt: vi.fn(async () => {}),
-    buildObservationContext: vi.fn(),
-    retrieveSourceBlocks: vi.fn(),
-  };
-  const ids = ['attempt-1', 'attempt-2'];
-  const modal = new ExplainBackModal(
-    {} as never,
-    {
-      grade: () => Promise.resolve(pending),
-      generateInstrumentId: () => ids.shift() ?? 'extra',
-      now: () => NOW,
-      ...writes,
-    } as never,
-    { kind: 'freeform' },
-  );
-  const internals = modal as unknown as Internals;
-  internals.render = () => {};
-  return { internals, writes, pending };
-}
-
-let consoleError: ReturnType<typeof vi.spyOn>;
-beforeEach(() => {
-  consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-});
-afterEach(() => {
-  consoleError.mockRestore();
-});
-
-describe.each(CASES)('a $kind decline ($reason) is never evidence', ({ reason, message }) => {
-  it('shows its message and the one Try again action, nothing graded', async () => {
-    const { internals, pending } = await openDecliningView(reason);
-    await internals.submitAnswer(PROMPT, 'an answer');
-    expect(internals.state.phase).toBe('graded');
-
-    const root = fakeEl('root');
-    internals.renderUnableToAssessPhase(
-      root,
-      PROMPT,
-      'an answer',
-      pending,
-      null,
-      'attempt-1',
-      internals.state.support as SealedAttemptSupport,
-    );
-    const all = flatten(root).slice(1);
-    expect(all.find((e) => e.kind === 'p')?.text).toBe(message);
-    const buttons = all.filter((e) => e.kind === 'button');
-    expect(buttons.map((b) => b.text)).toEqual([EXPLAIN_BACK_DISCARD_LABEL]);
+describe.each(CASES)('a $kind decline ($reason) is never evidence', ({ kind, reason, message }) => {
+  it('the dormant message for it is unchanged, for when grading returns', () => {
+    expect(declineKindOf(reason)).toBe(kind);
+    expect(declineMessageFor(kind)).toBe(message);
   });
 
-  it('records no verdict, no attainment, no misconception and runs no depth pass, on show or on Try again', async () => {
-    const { internals, writes } = await openDecliningView(reason);
-    await internals.submitAnswer(PROMPT, 'an answer');
-    const state = internals.state as unknown as Record<string, unknown>;
-    const discard = (internals as unknown as { discardGrading: (...a: unknown[]) => void })
-      .discardGrading;
-    discard.call(
-      internals,
-      PROMPT,
-      'an answer',
-      state.pending,
-      null,
-      state.attemptId,
-      state.support,
-    );
-    await vi.waitFor(() => expect(writes.recordSetAsideAttempt).toHaveBeenCalledTimes(1));
+  it('v0.9: the judge that would decline is never asked, nothing is recorded as a verdict, and no decline is shown', async () => {
+    const { ExplainBackModal } = await import('../../src/explain-back/modal.js');
+    const declining = {
+      grading: { outcome: 'unable-to-assess', ...(reason !== undefined ? { reason } : {}) },
+    };
+    const writes = {
+      grade: vi.fn(async () => declining as never),
+      acceptWithObservation: vi.fn(),
+      recordSoloGradeAndReview: vi.fn(),
+      recordSetAsideAttempt: vi.fn(async () => {}),
+      buildObservationContext: vi.fn(),
+      recordNonAttempt: vi.fn(async () => {}),
+    };
+    const practice = vi.fn(async () => ({ written: false as const, record: {} as never }));
+    const shown: string[] = [];
+    const view = new ExplainBackModal(
+      {} as never,
+      {
+        retrieveSourceBlocks: retrieveFor,
+        generateInstrumentId: () => 'attempt-1',
+        now: () => NOW,
+        recordPracticeExplanation: practice,
+        ...writes,
+      },
+      { kind: 'instrument', instrument: INSTRUMENT },
+    ) as unknown as ViewInternals;
+    const render = view.render.bind(view);
+    view.render = () => {
+      render();
+      shown.push(...view.contentEl.texts());
+    };
+    view.onOpen();
+    await vi.waitFor(() => expect(view.state.phase).toBe('answering'));
+    submit(view.contentEl, 'an answer', EXPLAIN_BACK_SUBMIT_LABEL);
+    await vi.waitFor(() => expect(view.state.phase).toBe('passages'));
+    view.contentEl.button(EXPLAIN_BACK_DONE_LABEL).click();
+    await vi.waitFor(() => expect(practice).toHaveBeenCalledTimes(1));
 
-    // Nothing that records a verdict, attainment, a review or a misconception, and no depth pass.
+    for (const declineMessage of ALL_DECLINE_MESSAGES) expect(shown).not.toContain(declineMessage);
+    expect(writes.grade).not.toHaveBeenCalled();
     expect(writes.acceptWithObservation).not.toHaveBeenCalled();
     expect(writes.recordSoloGradeAndReview).not.toHaveBeenCalled();
     expect(writes.buildObservationContext).not.toHaveBeenCalled();
-    expect(writes.retrieveSourceBlocks).not.toHaveBeenCalled();
+    expect(writes.recordSetAsideAttempt).not.toHaveBeenCalled();
     expect(writes.recordNonAttempt).not.toHaveBeenCalled();
-    // No feedback was shown, so no exposure marker either.
-    expect(writes.recordFeedbackShown).not.toHaveBeenCalled();
-
-    // The one write is the set-aside record, which carries no verdict.
-    const calls = writes.recordSetAsideAttempt.mock.calls as unknown as [
-      { outcome: Record<string, unknown>; acceptance?: string },
-    ][];
-    const input = calls[0]?.[0];
-    expect(input?.outcome).toEqual({ kind: 'unable-to-assess' });
-    expect(JSON.stringify(input)).not.toMatch(/verdict|incorrect|correct|misconception/i);
+    // Her answer's one record is the practice explanation, which carries no verdict.
+    expect(JSON.stringify(practice.mock.calls[0])).not.toMatch(
+      /verdict|incorrect|correct|misconception|unable-to-assess/i,
+    );
   });
 });

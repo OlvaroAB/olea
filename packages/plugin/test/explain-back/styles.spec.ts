@@ -6,9 +6,9 @@
  * those roots — see `styles.css`'s own banner comment on this section for the full argument,
  * and the epic's brief for why this bead does not edit that shared selector).
  *
- * `modal.ts`'s one dynamic class site is `` `olea-explain-back-region olea-explain-back-region-${kind}` ``
- * — expanded here over the real `ExplainBackRegionKind` value set (read from the source text
- * rather than hard-coded, so a fourth kind added there shows up as a newly-missing style rule).
+ * `[D-603]` (`ol-egov.141.89.6.129`): the v0.9 practice view draws its passages and controls with
+ * classes this section already styles, and no graded region; the region rules stay in
+ * `styles.css` (not this bead's file) for when findings return.
  */
 
 import { readFileSync } from 'node:fs';
@@ -42,21 +42,11 @@ function explainBackSection(): string {
 const css = explainBackSection();
 
 /**
- * `ExplainBackRegionKind` (`modal.ts`) — read from its own type-literal source text rather than
- * retyped, so a value added there and never styled here fails this file instead of passing
- * silently.
+ * Every static `cls:` string literal and `addClass` argument in the view. `[D-603]`
+ * (`ol-egov.141.89.6.129`) removed the graded regions and with them the view's one dynamic class
+ * template; a dynamic template reintroduced here is refused rather than guessed at, so it cannot
+ * slip past this guard unstyled.
  */
-function regionKinds(): readonly string[] {
-  const m = /type ExplainBackRegionKind = ([^;]+);/.exec(view);
-  expect(m, 'modal.ts declares ExplainBackRegionKind as a union of string literals').not.toBeNull();
-  const literals = [...(m?.[1] ?? '').matchAll(/'([a-z]+)'/g)].map((x) => x[1]);
-  expect(literals.length).toBeGreaterThan(0);
-  return literals as readonly string[];
-}
-
-const REGION_KINDS = regionKinds();
-
-/** Every static `cls:` string literal, plus the one dynamic template's prefix expanded over `REGION_KINDS`. */
 function classesEmittedByView(): readonly string[] {
   const found = new Set<string>();
 
@@ -68,22 +58,7 @@ function classesEmittedByView(): readonly string[] {
     if (cls !== undefined && cls !== '') found.add(cls);
   }
   for (const match of viewCode.matchAll(/cls:\s*`([^`]+)`/g)) {
-    const template = match[1] ?? '';
-    const staticPart = template.split('${')[0] ?? '';
-    const tokens = staticPart
-      .trim()
-      .split(/\s+/)
-      .filter((t) => t !== '');
-    const prefix = tokens[tokens.length - 1];
-    for (const token of tokens.slice(0, -1)) found.add(token);
-    if (prefix === undefined) continue;
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: matching modal.ts's literal source text, not building a template string here.
-    if (!template.includes('${kind}')) {
-      throw new Error(
-        `explain-back/styles.spec.ts: unrecognised dynamic cls template: ${template}`,
-      );
-    }
-    for (const kind of REGION_KINDS) found.add(`${prefix}${kind}`);
+    throw new Error(`explain-back/styles.spec.ts: unrecognised dynamic cls template: ${match[1]}`);
   }
 
   return [...found].sort();
@@ -101,13 +76,20 @@ function classesStyled(): ReadonlySet<string> {
 }
 
 describe('styles.css covers the explain-back modal', () => {
-  it('finds the classes the view emits, static and dynamic alike', () => {
+  it('finds the classes the view emits, the practice view’s included', () => {
     const emitted = classesEmittedByView();
-    expect(emitted).toContain('olea-explain-back');
-    expect(emitted).toContain('olea-explain-back-region-omission');
-    expect(emitted).toContain('olea-explain-back-region-confusion');
-    expect(emitted).toContain('olea-explain-back-mastery');
-    expect(emitted).toContain('olea-explain-back-cite');
+    for (const cls of [
+      'olea-explain-back',
+      'olea-explain-back-mastery',
+      'olea-explain-back-heading',
+      'olea-explain-back-region-items',
+      'olea-explain-back-item',
+      'olea-explain-back-item-text',
+      'olea-explain-back-cite',
+      'olea-explain-back-actions',
+    ]) {
+      expect(emitted).toContain(cls);
+    }
   });
 
   it('every class the view emits has a rule', () => {
@@ -116,8 +98,20 @@ describe('styles.css covers the explain-back modal', () => {
     expect(missing).toEqual([]);
   });
 
-  it('the three region kinds are all reflected in ExplainBackRegionKind, covered included even though it has no live caller yet', () => {
-    expect([...REGION_KINDS].sort()).toEqual(['confusion', 'covered', 'omission']);
+  it('v0.9 ([D-603]): the view draws no graded region — covered, omission or confusion — and no outcome line', () => {
+    const emitted = classesEmittedByView();
+    for (const cls of [
+      'olea-explain-back-region',
+      'olea-explain-back-region-covered',
+      'olea-explain-back-region-omission',
+      'olea-explain-back-region-confusion',
+      'olea-explain-back-outcome',
+      'olea-explain-back-encouragement',
+      'olea-explain-back-feedback',
+    ]) {
+      expect(emitted).not.toContain(cls);
+    }
+    expect(viewCode).not.toMatch(/ExplainBackRegionKind/);
   });
 });
 

@@ -96,9 +96,11 @@ export const REGISTRY_STATES: readonly RegistryWorkbenchState[] = [
     group: 'registry',
     note:
       "F8.4b's per-instrument explain-back history (`[D-175]`), rendered right on the " +
-      "instrument's own registry row. One instrument carries two real graded attempts at " +
-      'different SOLO depths — the current (later) one presently `[D-095]`-quarantined, shown ' +
-      'as "under re-review" rather than hidden or discounted. Its sibling instrument, same ' +
+      "instrument's own registry row. One instrument carries two graded attempts and, between " +
+      'them, one saved practice explanation (`[D-614]`) — three dated rows, none showing a depth ' +
+      'reading (`[D-603]`); the current graded one is presently `[D-095]`-quarantined, shown ' +
+      'as "under re-review" rather than hidden or discounted. The practice row\'s text appears ' +
+      'only when it is expanded. Its sibling instrument, same ' +
       'concept, has never been explained back and renders no history section at all — "never ' +
       'attempted" is omission, not an empty list.',
   },
@@ -317,6 +319,25 @@ function openGradeDispute(input: {
   };
 }
 
+/** Her fixture practice explanation's text, by content reference — read only when its row is expanded. */
+const BRIVANE_PRACTICE_CONTENT_REF = 'syn:content:brivane-practice-1';
+const BRIVANE_PRACTICE_TEXT = 'Synthetic practice words, as she wrote them.';
+
+/** A saved practice explanation (`[D-614]`): no grade, her text behind a content reference. */
+const BRIVANE_PRACTICE_ENTRY = {
+  schemaVersion: 6,
+  kind: 'practice-explanation',
+  eventId: 'wb-practice-brivane-1',
+  timestamp: '2027-01-07T09:00:00-08:00',
+  instrumentId: BRIVANE_INSTRUMENT_HISTORY.instrumentId,
+  attemptId: 'wb-practice-attempt-brivane-1',
+  conceptIds: ['syn:concept-key:brivane'],
+  promptShape: 'concept',
+  trigger: 'on-demand',
+  durationMs: null,
+  contentRef: BRIVANE_PRACTICE_CONTENT_REF,
+} as unknown as ReviewLogEntry;
+
 const BRIVANE_HISTORY_ENTRIES: readonly ReviewLogEntry[] = [
   explainBackGradeEntry({
     eventId: 'wb-explain-back-brivane-1',
@@ -332,6 +353,7 @@ const BRIVANE_HISTORY_ENTRIES: readonly ReviewLogEntry[] = [
     conceptIds: ['syn:concept-key:brivane'],
     soloLevel: 'relational',
   }),
+  BRIVANE_PRACTICE_ENTRY,
 ];
 
 const BRIVANE_DISPUTES: readonly DisputeLogRecord[] = [
@@ -825,6 +847,9 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
         notePath: instrumentSummary.notePath,
         blockId: instrumentSummary.blockId,
       });
+    },
+    async readPracticeExplanationText(contentRef: string): Promise<string | null> {
+      return contentRef === BRIVANE_PRACTICE_CONTENT_REF ? BRIVANE_PRACTICE_TEXT : null;
     },
     async openSourceLocation(location: RegistrySourceLocation): Promise<void> {
       sourceOpens.push(location);

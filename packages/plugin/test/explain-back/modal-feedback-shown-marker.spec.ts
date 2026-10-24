@@ -1,88 +1,57 @@
 /**
- * `[D-460]` (`ol-egov.141.89.6.86`): the explain-back view writes the feedback exposure marker
- * BEFORE the graded result renders, and a failed write still shows her the result while this
- * session holds the exposure as shown. Behavioural, through the view's own `submitAnswer`,
- * `discardGrading` and `onClose`.
+ * `[D-460]` (`ol-egov.141.89.6.86`), as the v0.9 view has it (`[D-603]`, F5.4 as amended;
+ * `ol-egov.141.89.6.129`): what she is shown after an answer is the supporting passages, and the
+ * exposure marker is written BEFORE they render. A failed write still shows her the passages, and
+ * the view and this session hold the exposure as shown; leaving the passages writes the marker
+ * once more. Behavioural, through the real view's own controls.
  *
- * Scenarios: `features/F5-explain-it-back.md` (olea-service), "F5.4 (continued) / [D-460]".
+ * Scenarios: `features/F5-explain-it-back.md` (olea-service), "F5.4 (continued) / [D-460]": the
+ * three scenarios tagged `modal-feedback-shown-marker.spec` (rewritten in place for `[D-603]`).
  *
- * `modal.ts` extends Obsidian's `Modal`, which cannot load under Vitest, so this file supplies a
- * bare `Modal` base and stands in for the two modules that need a real Obsidian, exactly as
- * `modal-idempotency.spec.ts` does. `render` is replaced by a recorder, so the order of what
- * was written and what was drawn is observable. Structural placeholders throughout (INV-3).
+ * `obsidian` is mocked with `./practice-view-harness.ts`'s `Modal`; the view renders into its DOM
+ * stand-in. Structural placeholders throughout (INV-3).
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  EMPTY_ATTEMPT_SEQUENCE,
-  type SealedAttemptSupport,
-  sealAttemptSupport,
-} from '../../src/explain-back/attempt-sequence.js';
+  EXPLAIN_BACK_DISCARD_LABEL,
+  EXPLAIN_BACK_DONE_LABEL,
+  EXPLAIN_BACK_PASSAGES_HEADING,
+  EXPLAIN_BACK_SUBMIT_LABEL,
+} from '../../src/explain-back/copy.js';
 import {
   createFeedbackExposureLedger,
   type FeedbackExposureLedger,
   type RecordFeedbackShown,
   resolvePriorAttemptState,
 } from '../../src/explain-back/feedback-exposure.js';
+import type { ViewPracticeExplanationInput } from '../../src/explain-back/practice-record.js';
+import { EXPLAIN_BACK_SKIP_LABEL } from '../../src/explain-back/skip.js';
 import { isoWithLocalOffset } from '../../src/review/ports.js';
+import {
+  INSTRUMENT,
+  NOW,
+  retrieveFor,
+  SUBJECT_PASSAGES,
+  submit,
+  type ViewInternals,
+} from './practice-view-harness.js';
 
-vi.mock('obsidian', () => ({
-  Modal: class {
-    contentEl = { empty: () => {} };
-    titleEl = {};
-    constructor(readonly app: unknown) {}
-  },
-}));
-vi.mock('../../src/registry/obsidian-ports.js', () => ({ openRegistryEntryFor: () => {} }));
-vi.mock('../../src/sprig/render-sprig.js', () => ({ renderSprig: () => {} }));
+vi.mock('obsidian', async () => (await import('./practice-view-harness.js')).fakeObsidian());
+vi.mock('../../src/sprig/render-sprig.js', async () => {
+  const { FakeEl } = await import('./practice-view-harness.js');
+  return { renderSprig: () => new FakeEl('svg') };
+});
 
-const NOW = new Date('2026-10-05T14:15:00Z');
-const INSTRUMENT = 'instrument-1';
-const UNAIDED = { hintOffered: false, sourceShownWhileAnswering: false } as const;
-const GRADED = { grading: { outcome: 'graded', verdict: 'partial' } } as never;
-const UNABLE = { grading: { outcome: 'unable-to-assess' } } as never;
+// The first import of the view (and `olea-core` behind it) can outlast a test's own timeout on a
+// loaded machine; it is made once, here, so each test times only its own work.
+beforeAll(async () => {
+  await import('../../src/explain-back/modal.js');
+}, 120_000);
 
-const PROMPT = {
-  context: {
-    question: 'Why does X happen?',
-    referenceAnswer: 'Because Y drives Z.',
-    sourceBlocks: [],
-    misconceptionDigest: [],
-  },
-  subjectConceptId: null,
-  originInstrumentId: INSTRUMENT,
-  conceptIds: [],
-  sourceBlocks: [],
-};
-
-interface Internals {
-  state: {
-    phase: string;
-    attemptId?: string;
-    support?: SealedAttemptSupport;
-    prompt?: unknown;
-    answer?: string;
-    pending?: unknown;
-    durationMs?: number | null;
-  };
-  render: () => void;
-  submitAnswer: (prompt: unknown, answer: string) => Promise<void>;
-  discardGrading: (
-    prompt: unknown,
-    answer: string,
-    pending: unknown,
-    durationMs: number | null,
-    attemptId: string,
-    support: SealedAttemptSupport,
-  ) => void;
-  onClose: () => void;
-}
-
-type GradeResult = 'graded' | 'unable-to-assess' | 'unavailable' | 'check-failed';
+const QUESTION = INSTRUMENT.instrumentId;
 
 async function openView(params: {
-  readonly grade?: () => Promise<unknown>;
-  readonly result?: GradeResult;
   readonly recordFeedbackShown?: RecordFeedbackShown;
   readonly ledger?: FeedbackExposureLedger;
   readonly events?: string[];
@@ -90,34 +59,40 @@ async function openView(params: {
   const { ExplainBackModal } = await import('../../src/explain-back/modal.js');
   const events = params.events ?? [];
   const ids = ['attempt-1', 'attempt-2', 'attempt-3'];
-  const result = params.result ?? 'graded';
-  const grade =
-    params.grade ??
-    (() => {
-      if (result === 'unavailable') return Promise.resolve(null);
-      if (result === 'check-failed') return Promise.reject(new Error('socket closed'));
-      return Promise.resolve(result === 'graded' ? GRADED : UNABLE);
-    });
   const ledger = params.ledger ?? createFeedbackExposureLedger();
-  const modal = new ExplainBackModal(
+  const practice = vi.fn(async (_input: ViewPracticeExplanationInput) => ({
+    written: false as const,
+    record: {} as never,
+  }));
+  const view = new ExplainBackModal(
     {} as never,
     {
-      grade,
-      acceptWithObservation: vi.fn(),
-      retrieveSourceBlocks: vi.fn(),
-      buildObservationContext: vi.fn(),
+      retrieveSourceBlocks: retrieveFor,
       generateInstrumentId: () => ids.shift() ?? 'extra',
       feedbackExposureLedger: ledger,
       now: () => NOW,
+      recordPracticeExplanation: practice,
       ...(params.recordFeedbackShown ? { recordFeedbackShown: params.recordFeedbackShown } : {}),
-    } as never,
-    { kind: 'freeform' },
-  );
-  const internals = modal as unknown as Internals;
-  internals.render = () => {
-    events.push(`render:${internals.state.phase}`);
+    },
+    { kind: 'instrument', instrument: INSTRUMENT },
+  ) as unknown as ViewInternals;
+  view.onOpen();
+  await vi.waitFor(() => expect(view.state.phase).toBe('answering'));
+  const render = view.render.bind(view);
+  view.render = () => {
+    events.push(`render:${view.state.phase}`);
+    render();
   };
-  return { internals, ledger, events };
+  return { view, ledger, events, practice };
+}
+
+function submitAnswer(view: ViewInternals, text: string): void {
+  submit(view.contentEl, text, EXPLAIN_BACK_SUBMIT_LABEL);
+}
+
+async function answer(view: ViewInternals, text: string): Promise<void> {
+  submitAnswer(view, text);
+  await vi.waitFor(() => expect(view.state.phase).toBe('passages'));
 }
 
 let consoleError: ReturnType<typeof vi.spyOn>;
@@ -130,8 +105,8 @@ afterEach(() => {
   consoleError.mockRestore();
 });
 
-describe('the marker is written before the graded result appears ([D-460])', () => {
-  it('the result renders only once the marker write has settled', async () => {
+describe('the marker is written before the supporting passages appear, and holds only the attempt’s identity and the time', () => {
+  it('the passages render only once the marker write has settled', async () => {
     const events: string[] = [];
     let releaseWrite: () => void = () => {};
     const recordFeedbackShown = vi.fn(() => {
@@ -143,189 +118,174 @@ describe('the marker is written before the graded result appears ([D-460])', () 
         };
       });
     });
-    const { internals } = await openView({ recordFeedbackShown, events });
+    const { view } = await openView({ recordFeedbackShown, events });
 
-    const submitted = internals.submitAnswer(PROMPT, 'an answer');
+    submitAnswer(view, 'an answer');
     await vi.waitFor(() => expect(recordFeedbackShown).toHaveBeenCalledTimes(1));
-    // The grading has returned and the write is in flight: nothing graded is on screen yet.
-    expect(internals.state.phase).toBe('grading');
-    expect(events).not.toContain('render:graded');
+    // The write is in flight: no passage is on screen yet.
+    expect(view.state.phase).toBe('revealing');
+    expect(view.contentEl.texts()).not.toContain(EXPLAIN_BACK_PASSAGES_HEADING);
 
     releaseWrite();
-    await submitted;
-    expect(events).toEqual(['render:grading', 'write:start', 'write:settled', 'render:graded']);
-    expect(internals.state).toMatchObject({ phase: 'graded', attemptId: 'attempt-1' });
+    await vi.waitFor(() => expect(view.state.phase).toBe('passages'));
+    expect(events).toEqual(['render:revealing', 'write:start', 'write:settled', 'render:passages']);
+    expect(view.state).toMatchObject({ phase: 'passages', attemptId: 'attempt-1' });
   });
 
-  it('holds only the question, the attempt and the time', async () => {
+  it('holds only the question, the attempt and the time: no answer, passage or other text', async () => {
     const recordFeedbackShown = vi.fn(async () => {});
-    const { internals } = await openView({ recordFeedbackShown });
+    const { view } = await openView({ recordFeedbackShown });
 
-    await internals.submitAnswer(PROMPT, 'an answer');
+    await answer(view, 'an answer');
 
     expect(recordFeedbackShown).toHaveBeenCalledTimes(1);
     expect(recordFeedbackShown).toHaveBeenCalledWith({
       timestamp: isoWithLocalOffset(NOW),
-      instrumentId: INSTRUMENT,
+      instrumentId: QUESTION,
       attemptId: 'attempt-1',
     });
     const [input] = recordFeedbackShown.mock.calls[0] as unknown as [Record<string, unknown>];
     expect(Object.keys(input).sort()).toEqual(['attemptId', 'instrumentId', 'timestamp']);
-    expect(JSON.stringify(input)).not.toContain('an answer');
+    const serialised = JSON.stringify(input);
+    expect(serialised).not.toContain('an answer');
+    for (const p of SUBJECT_PASSAGES) expect(serialised).not.toContain(p.block.text);
   });
 
-  it('a successful write is not repeated when she leaves the result', async () => {
+  it('a successful write is not repeated when she leaves the passages', async () => {
     const recordFeedbackShown = vi.fn(async () => {});
-    const { internals } = await openView({ recordFeedbackShown });
+    const { view } = await openView({ recordFeedbackShown });
 
-    await internals.submitAnswer(PROMPT, 'an answer');
-    internals.onClose();
+    await answer(view, 'an answer');
+    view.contentEl.button(EXPLAIN_BACK_DONE_LABEL).click();
 
     expect(recordFeedbackShown).toHaveBeenCalledTimes(1);
   });
 
-  it('unwired, the result renders exactly as before, and the session still notes it', async () => {
-    const { internals, ledger, events } = await openView({});
+  it('unwired, the passages render as soon as she submits, and the session still notes the exposure', async () => {
+    const { view, ledger, events } = await openView({});
 
-    await internals.submitAnswer(PROMPT, 'an answer');
+    await answer(view, 'an answer');
 
-    expect(events).toEqual(['render:grading', 'render:graded']);
-    expect(ledger.shown(INSTRUMENT)).toEqual({ attemptId: 'attempt-1' });
+    expect(events).toEqual(['render:revealing', 'render:passages']);
+    expect(ledger.shown(QUESTION)).toEqual({ attemptId: 'attempt-1' });
   });
 });
 
-describe('a failed marker write still shows her the result, and never reads as not shown in this session ([D-460])', () => {
+describe('a failed marker write still shows her the passages, and never reads as not shown in this session', () => {
   const failing = () => vi.fn(() => Promise.reject(new Error('write failed')));
 
-  it('she still sees the graded result, and the failure is never thrown at her', async () => {
+  it('she still sees the passages, and the failure is never thrown at her', async () => {
     const recordFeedbackShown = failing();
-    const { internals, events } = await openView({ recordFeedbackShown });
+    const { view, events } = await openView({ recordFeedbackShown });
 
-    await expect(internals.submitAnswer(PROMPT, 'an answer')).resolves.toBeUndefined();
+    await answer(view, 'an answer');
 
-    expect(internals.state).toMatchObject({ phase: 'graded', attemptId: 'attempt-1' });
-    expect(events).toEqual(['render:grading', 'render:graded']);
+    expect(view.state).toMatchObject({ phase: 'passages', attemptId: 'attempt-1' });
+    expect(view.contentEl.texts()).toContain(EXPLAIN_BACK_PASSAGES_HEADING);
+    expect(events).toEqual(['render:revealing', 'render:passages']);
   });
 
   it('the failure is logged without content: no ids, no answer', async () => {
-    const { internals } = await openView({ recordFeedbackShown: failing() });
+    const { view } = await openView({ recordFeedbackShown: failing() });
 
-    await internals.submitAnswer(PROMPT, 'an answer');
+    await answer(view, 'an answer');
 
     expect(consoleError).toHaveBeenCalledTimes(1);
     const logged = JSON.stringify(consoleError.mock.calls[0]?.[0]);
-    expect(logged).not.toContain(INSTRUMENT);
+    expect(logged).not.toContain(QUESTION);
     expect(logged).not.toContain('attempt-1');
     expect(logged).not.toContain('an answer');
   });
 
-  it('a view opened again in this session reads shown, so its revision is guided, even though her log holds nothing', async () => {
-    const { internals, ledger } = await openView({ recordFeedbackShown: failing() });
-    await internals.submitAnswer(PROMPT, 'an answer');
+  it('this session holds the exposure as shown, even though her log holds nothing', async () => {
+    const { view, ledger } = await openView({ recordFeedbackShown: failing() });
+    await answer(view, 'an answer');
 
     const prior = await resolvePriorAttemptState({
-      instrumentId: INSTRUMENT,
+      instrumentId: QUESTION,
       ledger,
       // Her log, where the marker never landed.
       readLogged: async () => ({ exposure: 'not-shown', lastAttemptId: null }),
     });
 
     expect(prior).toEqual({ exposure: 'shown', lastAttemptId: 'attempt-1' });
-    expect(sealAttemptSupport(EMPTY_ATTEMPT_SEQUENCE, UNAIDED, prior).supportLevelShown).toBe(
-      'guided',
+  });
+
+  it('an answer she writes again here, after "Try again", carries the exposure', async () => {
+    const { view, practice } = await openView({ recordFeedbackShown: failing() });
+    await answer(view, 'an answer');
+    view.contentEl.button(EXPLAIN_BACK_DISCARD_LABEL).click();
+    await answer(view, 'a revised answer');
+    view.contentEl.button(EXPLAIN_BACK_DONE_LABEL).click();
+    await vi.waitFor(() => expect(practice).toHaveBeenCalledTimes(2));
+
+    const revised = practice.mock.calls[1]?.[0];
+    expect(revised?.attemptId).toBe('attempt-2');
+    expect(revised?.passagesShownInView.map((shown) => shown.attemptId)).toEqual(['attempt-1']);
+    expect(revised?.passagesShownInView[0]?.passageFingerprints).toHaveLength(
+      SUBJECT_PASSAGES.length,
     );
   });
 
-  it('a revision in the same view after Try again is guided, never independent', async () => {
-    const { internals } = await openView({ recordFeedbackShown: failing() });
-    await internals.submitAnswer(PROMPT, 'an answer');
-    const { prompt, answer, pending, durationMs, attemptId, support } = internals.state;
-    internals.discardGrading(
-      prompt,
-      answer ?? '',
-      pending,
-      durationMs ?? null,
-      attemptId ?? '',
-      support as SealedAttemptSupport,
-    );
-
-    await internals.submitAnswer(PROMPT, 'a revised answer');
-
-    expect(internals.state.support).toEqual({
-      supportLevelShown: 'guided',
-      followsAttemptId: 'attempt-1',
-      feedbackExposure: 'shown',
-    });
-  });
-
-  it('leaving the result without Try again or accepting writes the same marker once more', async () => {
+  it('leaving the passages by "Done" writes the same marker once more', async () => {
     const recordFeedbackShown = failing();
-    const { internals } = await openView({ recordFeedbackShown });
-    await internals.submitAnswer(PROMPT, 'an answer');
+    const { view } = await openView({ recordFeedbackShown });
+    await answer(view, 'an answer');
 
-    internals.onClose();
+    view.contentEl.button(EXPLAIN_BACK_DONE_LABEL).click();
     await vi.waitFor(() => expect(recordFeedbackShown).toHaveBeenCalledTimes(2));
 
     expect(recordFeedbackShown.mock.calls[1]).toEqual(recordFeedbackShown.mock.calls[0]);
-    // A second failure is absorbed too: closing never throws at her.
+    // A second failure is absorbed too: leaving never throws at her.
     await vi.waitFor(() => expect(consoleError).toHaveBeenCalledTimes(2));
   });
 
-  it('after Try again the set-aside record speaks for it, so closing writes no second marker', async () => {
+  it('closing the view on the passages writes the same marker once more, and only once', async () => {
     const recordFeedbackShown = failing();
-    const { internals } = await openView({ recordFeedbackShown });
-    await internals.submitAnswer(PROMPT, 'an answer');
-    const { prompt, answer, pending, durationMs, attemptId, support } = internals.state;
-    internals.discardGrading(
-      prompt,
-      answer ?? '',
-      pending,
-      durationMs ?? null,
-      attemptId ?? '',
-      support as SealedAttemptSupport,
-    );
+    const { view } = await openView({ recordFeedbackShown });
+    await answer(view, 'an answer');
 
-    internals.onClose();
+    view.onClose();
+    await vi.waitFor(() => expect(recordFeedbackShown).toHaveBeenCalledTimes(2));
+    expect(recordFeedbackShown.mock.calls[1]).toEqual(recordFeedbackShown.mock.calls[0]);
+  });
 
-    expect(recordFeedbackShown).toHaveBeenCalledTimes(1);
+  it('"Try again" writes it once more too: in v0.9 no set-aside record speaks for the exposure', async () => {
+    const recordFeedbackShown = failing();
+    const { view } = await openView({ recordFeedbackShown });
+    await answer(view, 'an answer');
+
+    view.contentEl.button(EXPLAIN_BACK_DISCARD_LABEL).click();
+    await vi.waitFor(() => expect(recordFeedbackShown).toHaveBeenCalledTimes(2));
+    // Closing the answering phase afterwards writes no third marker.
+    view.onClose();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(recordFeedbackShown).toHaveBeenCalledTimes(2);
   });
 });
 
-describe('no marker where no feedback was shown ([D-460])', () => {
-  for (const result of ['unable-to-assess', 'unavailable', 'check-failed'] as const) {
-    it(`${result}: no marker is written and the session holds nothing as shown`, async () => {
-      const recordFeedbackShown = vi.fn(async () => {});
-      const { internals, ledger } = await openView({ result, recordFeedbackShown });
-
-      await internals.submitAnswer(PROMPT, 'an answer');
-
-      expect(recordFeedbackShown).not.toHaveBeenCalled();
-      expect(ledger.shown(INSTRUMENT)).toBeUndefined();
-    });
-  }
-
-  it('closed before the result arrived: no marker, no note, nothing drawn', async () => {
-    let releaseGrade: (value: unknown) => void = () => {};
+describe('no marker where no passages were shown', () => {
+  it('a skip: no marker is written and the session holds nothing as shown', async () => {
     const recordFeedbackShown = vi.fn(async () => {});
-    const { internals, ledger, events } = await openView({
-      grade: () =>
-        new Promise((resolve) => {
-          releaseGrade = resolve;
-        }),
-      recordFeedbackShown,
-    });
+    const { view, ledger } = await openView({ recordFeedbackShown });
 
-    const submitted = internals.submitAnswer(PROMPT, 'an answer');
-    internals.onClose();
-    releaseGrade(GRADED);
-    await submitted;
+    view.contentEl.button(EXPLAIN_BACK_SKIP_LABEL).click();
 
     expect(recordFeedbackShown).not.toHaveBeenCalled();
-    expect(ledger.shown(INSTRUMENT)).toBeUndefined();
-    expect(events).not.toContain('render:graded');
+    expect(ledger.shown(QUESTION)).toBeUndefined();
   });
 
-  it('closed while the marker write was in flight: the result is never drawn, and the marker stands', async () => {
+  it('a prompt closed without an answer: no marker, no note', async () => {
+    const recordFeedbackShown = vi.fn(async () => {});
+    const { view, ledger } = await openView({ recordFeedbackShown });
+
+    view.onClose();
+
+    expect(recordFeedbackShown).not.toHaveBeenCalled();
+    expect(ledger.shown(QUESTION)).toBeUndefined();
+  });
+
+  it('closed while the marker write was in flight: the passages are never drawn, and the marker stands', async () => {
     let releaseWrite: () => void = () => {};
     const recordFeedbackShown = vi.fn(
       () =>
@@ -333,16 +293,16 @@ describe('no marker where no feedback was shown ([D-460])', () => {
           releaseWrite = resolve;
         }),
     );
-    const { internals, events } = await openView({ recordFeedbackShown });
+    const { view, events } = await openView({ recordFeedbackShown });
 
-    const submitted = internals.submitAnswer(PROMPT, 'an answer');
+    submitAnswer(view, 'an answer');
     await vi.waitFor(() => expect(recordFeedbackShown).toHaveBeenCalledTimes(1));
-    internals.onClose();
+    view.onClose();
     releaseWrite();
-    await submitted;
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(events).not.toContain('render:graded');
-    // Conservative: the marker may claim a result she did not see; it withholds credit, never grants it.
+    expect(events).not.toContain('render:passages');
+    // Conservative: the marker may claim passages she did not see; it withholds, never grants.
     expect(recordFeedbackShown).toHaveBeenCalledTimes(1);
   });
 });

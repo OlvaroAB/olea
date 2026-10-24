@@ -154,7 +154,9 @@ export interface PendingRevalidation {
    *  - `passage-rule-unsupported`: the anchor's segmentation rule is no longer registered and the
    *    passage could not be re-found cleanly under the current one;
    *  - `source-revision-changed` ([D-518]): a non-markdown cited source's bytes no longer match the
-   *    recorded `sourceRevision`.
+   *    recorded `sourceRevision`;
+   *  - `lecturer-correction` ([D-473], [D-625]): a lecturer's correction applies to the slide claim
+   *    the instrument rests on. Never cleared by a pass of this build.
    * A withheld-for-a-reason fact is cleared by the reader the pass the passage is found again; it
    * never enters the judge's dispatch budget, and it is never read as a confirmed change.
    */
@@ -191,7 +193,16 @@ export type PendingReason =
    * rewrite the question ([D-508]). A build that predates this value keeps it as the raw string
    * ([D-473]).
    */
-  | 'source-revision-changed';
+  | 'source-revision-changed'
+  /**
+   * `ol-zjke` ([D-473], [D-625]; C5.3 "A correction of an answer basis", [D-467]): an attributable,
+   * clear lecturer correction was judged to apply to the slide claim this instrument rests on (or
+   * the judgement could not place the instrument), so it is withheld though its cited file is
+   * unchanged. Written only by `../slide-correction.ts`. No pass of this build resolves it: the
+   * citation pass leaves the anchor exactly as it is (`citation-revision-wiring.ts`,
+   * `isReasonThisBuildResolves`), so the hold stands until a reconciliation route ends it.
+   */
+  | 'lecturer-correction';
 
 /**
  * `[D-473]` (`ol-egov.141.89.5.52`), the tolerant reader: a reason string this build does not know

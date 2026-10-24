@@ -167,6 +167,28 @@ export const TASK_IDS = {
    */
   MATERIALITY_JUDGE: 'materiality.judge.v1',
   /**
+   * W6 · Slot J — `[D-625]` / `ol-zjke` (Class B, additive within the current contract version):
+   * the judgement behind the slide-correction route. Given the transcript part holding a sentence
+   * that core's slide-correction cue flagged, and the instruments of the lecture's linked deck,
+   * does the lecturer correct what a slide says, and which instruments rest on the corrected claim?
+   * Same slot as `materiality.judge.v1` for the same reason: a judgement over passages already
+   * supplied, no generation. The Worker's `src/tasks/slideCorrectionJudge.ts` owns the request and
+   * response schemas (as `materialityJudge.ts` does for its id); there is no client-side zod
+   * schema here.
+   *
+   * - request: `{ correction: { passage: string (min 1), sentence: { start: int >= 0,
+   *   end: int > start } }, candidates: [{ slidePassage: string (min 1), item: string (min 1) }]
+   *   (max 24) }`. The transcript part holding a sentence the cue flagged, with that sentence's
+   *   offsets; and the instruments of the lecture's linked deck, each as the slide passage it
+   *   cites and its own prompt-and-answer text. Transient, never persisted (D-005); no path, id or
+   *   name travels.
+   * - response: `{ attributableToLecturer: boolean, clear: boolean, candidates: [{ index: int
+   *   (0-based into the request's candidates), restsOnCorrectedClaim: 'yes' | 'no' | 'unclear' }] }`.
+   * - an empty passage or no candidate is answered without a model call as not a correction
+   *   (INV-5).
+   */
+  SLIDE_CORRECTION_JUDGE: 'slide-correction.judge.v1',
+  /**
    * W4 · Slot G — examiner-declared scope (Outcome) extraction and a past
    * paper's own structure (sections, item counts, marks, question forms),
    * one task id for both of component register row 1.1b's named outputs
@@ -579,13 +601,67 @@ export const TRANSCRIPT_SEGMENT_FLAGS = Object.freeze([
 ] as const);
 export type TranscriptSegmentFlag = (typeof TRANSCRIPT_SEGMENT_FLAGS)[number];
 
+/**
+ * `[D-624]` / `ol-b769` (Class B, additive within the current contract version): the OPTIONAL
+ * `flaggedClaims` of a transcript origin entry. They are the claims (sentences) of this passage
+ * that the per-claim rule (core's `claimEligibility`) withholds by default, each by half-open
+ * UTF-16 offsets `[start, end)` into the passage text and with its flag kinds. It lets the Worker
+ * show each flagged claim as its own passage and withhold a drafted practice item whose own
+ * citation names one (the guard blocks declared barred support). Not persisted. Roles and kinds
+ * only, never text.
+ *
+ * Entry rules: each claim has start < end; claims are ascending and do not overlap; `flaggedClaims`
+ * requires `flags`; every kind a claim names is in the entry's `flags`. Request rule (see
+ * `refineSourceChunkOriginAlignment`): every claim ends within its passage.
+ *
+ * Skew: the entry is `.strict()`, so a Worker older than this field REJECTS a request carrying it
+ * (it is not stripped like the outer `sourceChunkOrigins` field). The Worker is deployed first.
+ */
+export const flaggedClaim = z
+  .object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().positive(),
+    flags: z.array(z.enum(TRANSCRIPT_SEGMENT_FLAGS)).min(1),
+  })
+  .strict();
+export type FlaggedClaim = z.infer<typeof flaggedClaim>;
+
 export const transcriptSourceChunkOrigin = z
   .object({
     kind: z.literal('transcript'),
     speakerRole: z.enum(TRANSCRIPT_SPEAKER_ROLES),
     flags: z.array(z.enum(TRANSCRIPT_SEGMENT_FLAGS)).optional(),
+    flaggedClaims: z.array(flaggedClaim).min(1).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((entry, ctx) => {
+    const claims = entry.flaggedClaims;
+    if (claims === undefined) return;
+    const fail = (message: string, path: (string | number)[]) =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message, path });
+    if (entry.flags === undefined) {
+      fail('flaggedClaims requires flags', ['flaggedClaims']);
+    }
+    claims.forEach((claim, i) => {
+      if (claim.start >= claim.end) {
+        fail('a flagged claim must have start < end', ['flaggedClaims', i]);
+      }
+      const prev = claims[i - 1];
+      if (prev !== undefined && claim.start < prev.end) {
+        fail('flaggedClaims must be ascending and must not overlap', ['flaggedClaims', i]);
+      }
+      if (entry.flags !== undefined) {
+        const declared = entry.flags;
+        if (claim.flags.some((f) => !declared.includes(f))) {
+          fail("a flagged claim's kinds must be among the entry's flags", [
+            'flaggedClaims',
+            i,
+            'flags',
+          ]);
+        }
+      }
+    });
+  });
 export type TranscriptSourceChunkOrigin = z.infer<typeof transcriptSourceChunkOrigin>;
 
 /** The request field: one entry per `sourceChunks` entry, `null` where it is not a transcript passage. */
@@ -593,7 +669,9 @@ export const sourceChunkOriginsField = z.array(transcriptSourceChunkOrigin.nulla
 
 /**
  * The alignment rule, for a request's refinement: when `sourceChunkOrigins` is present its length
- * must equal `sourceChunks`'. Adds one issue at `sourceChunkOrigins` otherwise.
+ * must equal `sourceChunks`'. Adds one issue at `sourceChunkOrigins` otherwise. When lengths align,
+ * every flagged claim of entry `i` must end within `sourceChunks[i]` (UTF-16 code units); an
+ * issue lands at `['sourceChunkOrigins', i, 'flaggedClaims']` (`[D-624]`).
  */
 export function refineSourceChunkOriginAlignment(
   value: { sourceChunks: readonly unknown[]; sourceChunkOrigins?: readonly unknown[] | undefined },
@@ -608,7 +686,20 @@ export function refineSourceChunkOriginAlignment(
       message: 'sourceChunkOrigins must have exactly one entry per sourceChunks entry',
       path: ['sourceChunkOrigins'],
     });
+    return;
   }
+  value.sourceChunkOrigins?.forEach((origin, i) => {
+    const claims = (origin as { flaggedClaims?: readonly { end: number }[] } | null)?.flaggedClaims;
+    const chunk = value.sourceChunks[i];
+    if (claims === undefined || typeof chunk !== 'string') return;
+    if (claims.some((c) => c.end > chunk.length)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'a flagged claim must end within its passage',
+        path: ['sourceChunkOrigins', i, 'flaggedClaims'],
+      });
+    }
+  });
 }
 
 /**

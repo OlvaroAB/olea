@@ -1,7 +1,7 @@
 // Flags in the request field (ol-egov.141.89.1.64; D-465). Synthetic text only.
 
 import { describe, expect, it } from 'vitest';
-import { sourceChunkOriginsFragment } from './source-origin.js';
+import { sourceChunkOriginsFragment } from '../src/source-origin.js';
 
 const host = {
   frontmatterFor: () => undefined,
@@ -22,6 +22,10 @@ describe('sourceChunkOriginsFragment flags', () => {
         kind: 'transcript',
         speakerRole: 'unknown',
         flags: ['inaudible', 'visual-reference', 'term-discrepancy'],
+        // ol-b769 (D-624): the one sentence is the flagged claim.
+        flaggedClaims: [
+          { start: 0, end: 51, flags: ['inaudible', 'visual-reference', 'term-discrepancy'] },
+        ],
       },
       null,
     ]);

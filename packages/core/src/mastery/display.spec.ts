@@ -24,6 +24,21 @@ describe('mastery display vocabulary (F2.11, D-049)', () => {
     ]);
   });
 
+  it('gives tree exactly the registry meaning and leaves the other three unchanged (F2.11, D-612)', () => {
+    expect(MASTERY_DISPLAY.seed.meaning).toBe('Not practised yet.');
+    expect(MASTERY_DISPLAY.sprout.meaning).toBe('Practised. Recall is not holding yet.');
+    expect(MASTERY_DISPLAY.sapling.meaning).toBe('Recalled reliably across spaced attempts.');
+    expect(MASTERY_DISPLAY.tree.meaning).toBe(
+      "Explained in your own words and checked against your material. Explanation checking isn't available yet.",
+    );
+  });
+
+  it('no stage meaning keeps the earlier tree sentence (F2.11, D-612)', () => {
+    for (const s of MASTERY_ORDER) {
+      expect(MASTERY_DISPLAY[s].meaning).not.toContain('not only recognised');
+    }
+  });
+
   it('maps the four stages to the ratified sprig geometry — 0, 1, 3 leaves, fruit only at the top', () => {
     // Never a fourth leaf: `tree` adds fruit to the same three leaves
     // `sapling` already draws (docs/design MasteryAxes.jsx `StageSprig`).

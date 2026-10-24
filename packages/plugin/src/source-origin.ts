@@ -20,6 +20,15 @@
  * optional `lectureTermsFor` (taken from the lecture bundle); without it no term check runs.
  * Only the kinds travel, never the matched text or the candidate word.
  *
+ * Flagged claims (`ol-b769`, D-624): a flagged entry also carries `flaggedClaims`, one
+ * `{ start, end, flags }` per claim (sentence) that core's `claimEligibility` withholds from
+ * grounding, with half-open UTF-16 offsets into the passage text, ascending. It lets the Worker
+ * show each flagged claim as its own passage and withhold a drafted item whose own citation names
+ * one. Only spans and kinds travel, never text; the part text is still sent whole and unchanged.
+ * Omitted when there is no such claim. The entry is strict, so the Worker must be deployed FIRST:
+ * an older Worker rejects a request carrying the key. The flags and the claims are computed from
+ * one `flagTranscriptPart` result so they cannot disagree.
+ *
  * "Is a transcript" is decided the way the reader decides it (`resolveTranscriptFormat`): a
  * `.txt` file (the formats this build can read) is one; a `.md` is one only when its cached frontmatter `role`
  * declares it, which needs the optional `host`. Without a host a `.md` reads as not a transcript
@@ -29,6 +38,7 @@
 import type { TranscriptSourceChunkOrigin, TranscriptSpeakerRole } from 'olea-contracts';
 import {
   attributeTranscript,
+  claimEligibility,
   flagTranscriptPart,
   isTranscriptRole,
   resolveTranscriptFormat,
@@ -72,13 +82,22 @@ export function sourceChunkOriginOf(
 ): TranscriptSourceChunkOrigin | null {
   if (!isSuppliedTranscriptPath(path, host)) return null;
   const speaker = attributeTranscript([{ text }]).passages[0]?.speaker ?? 'unknown-speaker';
-  const { flags } = flagTranscriptPart(text, {
+  const partFlags = flagTranscriptPart(text, {
     bundleTerms: host?.lectureTermsFor?.(path as VaultPath),
   });
+  const { flags } = partFlags;
+  // The claims come from the SAME partFlags, so the entry's flags and its claims cannot disagree.
+  const flaggedClaims =
+    flags.length > 0
+      ? claimEligibility(text, partFlags)
+          .filter((c) => !c.usableForGrounding)
+          .map((c) => ({ start: c.start, end: c.end, flags: [...c.flags] }))
+      : [];
   return {
     kind: 'transcript',
     speakerRole: ROLE_BY_SPEAKER[speaker],
     ...(flags.length > 0 ? { flags: [...flags] } : {}),
+    ...(flaggedClaims.length > 0 ? { flaggedClaims } : {}),
   };
 }
 
