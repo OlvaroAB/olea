@@ -278,7 +278,23 @@ describe('the own-words prompt and heading (`[D-190]`)', () => {
 });
 
 describe('practiceByDateLine (D-469, F8.8 "What she had practised by the date")', () => {
-  it('uses the ruled words verbatim, with the three counts filled', () => {
+  it('in v0.9 leaves out the explanation-level sentence: the first stands alone, grammatical, no second count ([D-632])', () => {
+    const line = practiceByDateLine({
+      kind: 'counts',
+      practised: 4,
+      scopeSize: 9,
+      explained: null,
+      basis: 'assessment-stated',
+    });
+    expect(line).toBe(
+      'Before the assessment date, you had practised 4 of the 9 concepts linked to this assessment in Olea.',
+    );
+    expect(line).not.toMatch(/explanation-level|by then/i);
+    expect(line.match(/\d+/g)).toEqual(['4', '9']);
+    expect(line.endsWith('.')).toBe(true);
+  });
+
+  it('keeps the ruled second sentence where a count of graded explanation exists, so it returns without a rewrite', () => {
     expect(
       practiceByDateLine({
         kind: 'counts',
@@ -293,7 +309,7 @@ describe('practiceByDateLine (D-469, F8.8 "What she had practised by the date")'
   });
 
   it('names the scope basis for each origin, and none for a limitation', () => {
-    const counts = { kind: 'counts', practised: 1, scopeSize: 2, explained: 0 } as const;
+    const counts = { kind: 'counts', practised: 1, scopeSize: 2, explained: null } as const;
     expect(practiceByDateBasisLine({ ...counts, basis: 'assessment-stated' })).toMatch(
       /recorded scope.*later edit/i,
     );
@@ -317,7 +333,7 @@ describe('practiceByDateLine (D-469, F8.8 "What she had practised by the date")'
         kind: 'counts',
         practised: 1,
         scopeSize: 1,
-        explained: 1,
+        explained: null,
         basis: 'evidenced',
       }),
       practiceByDateLine({ kind: 'unavailable', reason: 'history' }),
