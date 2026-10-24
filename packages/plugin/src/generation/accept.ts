@@ -85,11 +85,38 @@
  * This file judges nothing and writes nothing itself. **A draft with no `demand` forwards nothing**,
  * exactly as before this bead: nothing is written and the instrument reads unspecified for ever (a
  * legacy draft, a draft for an unspecified need, a draft for an ask no generator serves).
+ *
+ * ## `ol-zjke.2` (decision sheet v87 row 4, option (a); `[D-473]`, `[D-625]`): a held draft's hold
+ * becomes its instrument's, with no unprotected interval
+ *
+ * A pending draft whose slide claim a lecturer's correction invalidates is held under its draft hold
+ * key in the citation store (`../ingestion/slide-correction.ts`). It is offered nowhere, but one
+ * presented or listed before the hold landed can still be accepted, by any path, and every path
+ * comes here. The order, each step durable before the next:
+ *  1. the draft's hold is read (a store that cannot be read refuses the accept: nothing written);
+ *  2. the materialiser derives the instrument id and, before writing anything of the instrument to
+ *     her vault, calls `beforeWrite`, which writes the same hold under the instrument id and reads
+ *     it back (`carryDraftHold`); a failure there refuses the accept with nothing written;
+ *  3. the instrument is written, the draft record turns accepted and the verdict is appended;
+ *  4. the draft's hold is read again (a hold the correction route wrote while this ran is carried
+ *     the same way), and only then is the draft key released (`releaseDraftHold`).
+ * A restart anywhere leaves the instrument held: before 3 the draft is still a held pending draft
+ * (and the instrument, if it reached her vault, already held); after 3 both keys may stand, the
+ * draft key read by nothing because the draft is no longer pending, and a re-call of `accept`
+ * releases it without touching the instrument's hold. A rejection releases a held draft's key once
+ * the draft is rejected. Without a store (`holds` omitted) nothing is read, as before.
  */
 
 import type { InstrumentType } from 'olea-contracts';
 import type { VaultSource } from 'olea-core';
 import { appendVerdictRecord, scoredConceptId } from 'olea-core';
+import {
+  type CitationAnchorRecord,
+  type CitationHashStore,
+  carryDraftHold,
+  readDraftHold,
+  releaseDraftHold,
+} from '../ingestion/materiality/citation-hash-store.js';
 import { isoWithLocalOffset } from '../review/ports.js';
 import type { DraftCacheStore } from './cache-store.js';
 import type { MaterializeDemandInput } from './demand-target.js';
@@ -115,6 +142,11 @@ export type DraftMaterializeFn = (
     readonly deviceId: string;
     readonly now: () => Date;
     readonly generateEventId?: () => string;
+    /**
+     * `ol-zjke.2`: called with the instrument id once it is derived and before anything of the
+     * instrument is written to her vault; a throw writes nothing. Present only for a held draft.
+     */
+    readonly beforeWrite?: (instrumentId: string) => Promise<void>;
   },
 ) => Promise<{ readonly instrumentId: string }>;
 
@@ -207,6 +239,8 @@ const materializeMcqDraft: DraftMaterializeFn = (vault, record, deps) => {
       deviceId: deps.deviceId,
       now: deps.now,
       ...(deps.generateEventId ? { generateEventId: deps.generateEventId } : {}),
+      // `ol-zjke.2`: a held draft's hold lands on the instrument before the instrument does.
+      ...(deps.beforeWrite ? { beforeWrite: deps.beforeWrite } : {}),
     },
   );
 };
@@ -268,6 +302,8 @@ const materializeQaCardDraft: DraftMaterializeFn = (vault, record, deps) => {
       deviceId: deps.deviceId,
       now: deps.now,
       ...(deps.generateEventId ? { generateEventId: deps.generateEventId } : {}),
+      // `ol-zjke.2`: see `materializeMcqDraft`'s identical forward above.
+      ...(deps.beforeWrite ? { beforeWrite: deps.beforeWrite } : {}),
     },
   );
 };
@@ -331,6 +367,37 @@ export interface DraftAcceptPortDeps {
    * `olea-core` write primitive — see this module's doc.
    */
   readonly materializers?: Partial<Record<InstrumentType, DraftMaterializeFn>>;
+  /**
+   * `ol-zjke.2`: the citation store a draft's hold is read from and carried to its instrument in
+   * (the module doc's `ol-zjke.2` section), read when each call starts. A getter because
+   * `main.ts` builds the store after this port; `null` or `undefined` reads no hold, as before.
+   */
+  readonly holds?: () => CitationHashStore | null | undefined;
+}
+
+/**
+ * `ol-zjke.2`, step 4 of the module doc's order: a hold on the draft read now (one written while the
+ * conversion ran, or one left by an earlier conversion) is carried to `instrumentId`, which keeps a
+ * hold it already has, and only then is the draft key released. A failed release leaves a key no
+ * reader consults (the draft is no longer pending); it is logged by error name only (D-005).
+ */
+async function settleDraftHold(
+  store: CitationHashStore,
+  draftId: string,
+  instrumentId: string,
+  carried: CitationAnchorRecord | undefined,
+): Promise<void> {
+  const late = await readDraftHold(store, draftId);
+  if (late !== undefined) await carryDraftHold(store, late, instrumentId);
+  if (late === undefined && carried === undefined) return;
+  try {
+    await releaseDraftHold(store, draftId);
+  } catch (error) {
+    console.error(
+      'Olea: a converted draft hold was kept on the instrument, its draft key not released',
+      error instanceof Error ? error.name : 'unknown',
+    );
+  }
 }
 
 export function createDraftAcceptPort(deps: DraftAcceptPortDeps): DraftAcceptPort {
@@ -364,6 +431,20 @@ export function createDraftAcceptPort(deps: DraftAcceptPortDeps): DraftAcceptPor
       status: 'rejected',
       resolvedAt: isoWithLocalOffset(now()),
     });
+    // `ol-zjke.2`: a rejected draft is never offered again, so its hold key (if any) is released.
+    const store = deps.holds?.() ?? undefined;
+    if (store !== undefined) {
+      try {
+        if ((await readDraftHold(store, record.draftId)) !== undefined) {
+          await releaseDraftHold(store, record.draftId);
+        }
+      } catch (error) {
+        console.error(
+          'Olea: a rejected draft kept its hold key',
+          error instanceof Error ? error.name : 'unknown',
+        );
+      }
+    }
 
     await appendVerdictRecord(
       deps.vault,
@@ -398,6 +479,12 @@ export function createDraftAcceptPort(deps: DraftAcceptPortDeps): DraftAcceptPor
         // retry: `instrumentId` is undefined, so it throws rather than
         // silently re-accepting.
         if (record.instrumentId !== undefined) {
+          // `ol-zjke.2`: a draft key left by a conversion cut short is released here, without
+          // touching the instrument's hold (step 4 of the module doc's order).
+          const store = deps.holds?.() ?? undefined;
+          if (store !== undefined) {
+            await settleDraftHold(store, draftId, record.instrumentId, undefined);
+          }
           return { instrumentId: record.instrumentId };
         }
         throw new Error(
@@ -416,6 +503,18 @@ export function createDraftAcceptPort(deps: DraftAcceptPortDeps): DraftAcceptPor
         );
       }
 
+      // `ol-zjke.2`, steps 1 and 2 of the module doc's order: a store that cannot be read throws
+      // here, before anything is written; a held draft's hold is carried by `beforeWrite`.
+      const holdStore = deps.holds?.() ?? undefined;
+      const draftHold =
+        holdStore === undefined ? undefined : await readDraftHold(holdStore, draftId);
+      let carriedTo: string | undefined;
+      const carry = async (id: string): Promise<void> => {
+        if (holdStore === undefined || draftHold === undefined) return;
+        await carryDraftHold(holdStore, draftHold, id);
+        carriedTo = id;
+      };
+
       let instrumentId: string;
       try {
         ({ instrumentId } = await materialize(deps.vault, record, {
@@ -429,6 +528,7 @@ export function createDraftAcceptPort(deps: DraftAcceptPortDeps): DraftAcceptPor
           deviceId: deps.deviceId,
           now,
           ...(deps.generateEventId ? { generateEventId: deps.generateEventId } : {}),
+          ...(draftHold !== undefined ? { beforeWrite: carry } : {}),
         }));
       } catch (err) {
         if (err instanceof StaleSourceRevisionError) {
@@ -439,6 +539,9 @@ export function createDraftAcceptPort(deps: DraftAcceptPortDeps): DraftAcceptPor
         }
         throw err;
       }
+      // A materialiser that never called `beforeWrite` (an injected one; both registered ones call
+      // it) or returned another id: carried now, before the draft stops being a held pending draft.
+      if (draftHold !== undefined && carriedTo !== instrumentId) await carry(instrumentId);
 
       await deps.cache.put({
         ...record,
@@ -463,6 +566,11 @@ export function createDraftAcceptPort(deps: DraftAcceptPortDeps): DraftAcceptPor
           ...(deps.generateEventId ? { generateEventId: deps.generateEventId } : {}),
         },
       );
+
+      // `ol-zjke.2`, step 4: only now is the draft key released (and a hold written meanwhile carried).
+      if (holdStore !== undefined) {
+        await settleDraftHold(holdStore, draftId, instrumentId, draftHold);
+      }
 
       return { instrumentId };
     },

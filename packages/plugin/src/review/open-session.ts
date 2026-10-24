@@ -243,7 +243,10 @@ import {
   evaluateSchedulingObservationRouting,
 } from '../grading/wiring.js';
 import { canonicalizeForMateriality } from '../ingestion/materiality/canonical.js';
-import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
+import {
+  type CitationHashStore,
+  readHeldDraftIds,
+} from '../ingestion/materiality/citation-hash-store.js';
 import { stripQuestionBlocks } from '../ingestion/materiality/citation-material.js';
 import {
   citedPassagePath,
@@ -1034,7 +1037,20 @@ export async function openReviewSession(
     // below); see `OpenReviewSessionInput.draftCache`'s
     // doc. `[]` when no cache is wired, so this never removes or reorders
     // anything `composeQueue`/`executeStudyPlan` decided.
-    const pendingDrafts = input.draftCache ? await input.draftCache.listPending() : [];
+    const listedDrafts = input.draftCache ? await input.draftCache.listPending() : [];
+    // `ol-zjke.2` (decision sheet v87 row 4, `[D-473]`, `[D-625]`): a pending draft held for a
+    // lecturer's correction (its draft hold key in the citation store) is not offered, before it
+    // could be presented or passively accepted ([D-097]), as the session builder leaves out a held
+    // instrument. Read from the persisted store, so the hold stands across a restart. No store
+    // supplied: nothing is read, as for the instruments.
+    const heldDrafts =
+      input.citationHashStore !== undefined && listedDrafts.length > 0
+        ? await readHeldDraftIds(
+            input.citationHashStore,
+            listedDrafts.map((record) => record.draftId),
+          )
+        : EMPTY_INSTRUMENT_ID_SET;
+    const pendingDrafts = listedDrafts.filter((record) => !heldDrafts.has(record.draftId));
     const draftItems = pendingDrafts.map((record) => toDraftReviewQueueItem(record, input.random));
     // `[D-627]` (`ol-3ux7.5.57.98`): exact duplicate content is served once, the first occurrence
     // kept, so a due instrument wins over a pending draft. Nothing is merged or written; see
@@ -1124,10 +1140,12 @@ export async function openReviewSession(
           }),
       // `ol-egov.141.89.5.73` ([D-515]): a pending draft on a non-markdown source, against its own citation.
       // `ol-egov.141.89.5.108`: a successor so set aside goes back to the revision job.
+      // `ol-zjke.2`: and a draft held since the session opened, read fresh from the same store.
       checkDraftSourceAtPresentation: draftSourceCheckAtPresentation(
         input.vault,
         pendingDrafts,
         input.redraftSetAsideSuccessor,
+        input.citationHashStore,
       ),
       // Always wired, unconditionally — unlike the caller-supplied ports
       // above, this is computed HERE (see `liveSchedulingObservations`
@@ -1860,14 +1878,24 @@ async function bytesMatchRevision(
  * drafts it again against the source as it stands (`revision-job-runner.ts`,
  * `redraftSetAsideSuccessor`, which decides whether anything is queued and bounds it). The draft is
  * set aside whatever that does, and a failure in it is swallowed.
+ *
+ * `ol-zjke.2` (decision sheet v87 row 4, `[D-473]`, `[D-625]`): first, a draft whose draft hold key
+ * carries a current fact in `holds` (a lecturer's correction judged to invalidate its slide claim
+ * since the session opened) is `'check-failed'`, as a held instrument is at its presentation, so it
+ * is neither shown nor passively accepted. Read fresh at each presentation; a store that cannot be
+ * read throws, which the session reads as `'check-failed'`. Absent `holds`: not read.
  */
 export function draftSourceCheckAtPresentation(
   vault: VaultSource,
   drafts: readonly DraftRecord[],
   redraftSetAside?: (draft: DraftRecord) => Promise<void>,
+  holds?: CitationHashStore,
 ): (draftId: string) => Promise<'clear' | 'check-failed'> {
   const byId = new Map(drafts.map((draft) => [draft.draftId, draft]));
   return async (draftId) => {
+    if (holds !== undefined && (await readHeldDraftIds(holds, [draftId])).has(draftId)) {
+      return 'check-failed';
+    }
     const draft = byId.get(draftId);
     const citation = draft?.sourceCitation;
     if (draft === undefined || citation === undefined) return 'clear';

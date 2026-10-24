@@ -330,6 +330,12 @@ export interface MaterializeAcceptedCardDraftDeps {
   readonly now?: () => Date;
   /** Injectable for deterministic tests; defaults to `crypto.randomUUID()`, same as `appendSuccessionRecord` itself. */
   readonly generateEventId?: () => string;
+  /**
+   * `ol-zjke.2` (decision sheet v87 row 4): called with the derived instrument id before anything of
+   * the card is written (the citation sidecar, the target record, the note), so a held draft's hold
+   * lands on the instrument first (`accept.ts`). A throw propagates and nothing is written.
+   */
+  readonly beforeWrite?: (instrumentId: string) => Promise<void>;
 }
 
 /** `enumerate.ts`'s private `uidOf`, reproduced from only public `olea-core` exports — see the module doc's "THE IDENTITY DERIVATION" section, step 1. */
@@ -484,6 +490,8 @@ export async function materializeAcceptedCardDraft(
     explicitId: null,
     instrumentType: 'qa',
   });
+  // `ol-zjke.2`: before the first write below.
+  await deps.beforeWrite?.(instrumentId);
 
   // `ol-v7r5.68`, Class B (see the module doc): never `undefined` any more.
   // A real generated card always has SOME source it can honestly name — at

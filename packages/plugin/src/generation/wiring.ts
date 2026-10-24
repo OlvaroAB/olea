@@ -65,6 +65,7 @@ import {
   type Scheduler,
 } from 'olea-core';
 import { extractConceptsFromVault } from '../concept/wiring.js';
+import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
 import type { DraftAcceptPort } from './accept.js';
 import { createDraftAcceptPort } from './accept.js';
@@ -94,6 +95,12 @@ export interface GenerationWiringDeps {
    * same pure computation `main.ts` composes, so no caller has to pass one for the order to apply.
    */
   readonly scheduler?: Scheduler;
+  /**
+   * `ol-zjke.2` (decision sheet v87 row 4): the citation store a held draft's hold is read from and
+   * carried to its instrument in, threaded into {@link createDraftAcceptPort}'s `holds`. A getter,
+   * because `main.ts` builds the store after this wiring. Omitted: no hold is read, as before.
+   */
+  readonly draftHolds?: () => CitationHashStore | null | undefined;
 }
 
 /**
@@ -283,6 +290,7 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
     cache,
     deviceId: deps.deviceId,
     ...(deps.now !== undefined ? { now: deps.now } : {}),
+    ...(deps.draftHolds !== undefined ? { holds: deps.draftHolds } : {}),
   });
   const listConceptsForCourse = listConceptsForCourseFactory(deps.vault, coursesFolder);
   // `ol-egov.141.89.105.28` ([D-368]): the drain-order reading reads the vault (her review log) and

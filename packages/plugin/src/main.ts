@@ -1143,7 +1143,14 @@ export default class OleaPlugin extends Plugin {
     // where re-reading `this.generation` inside a lazily-invoked
     // `registerView` callback would need a redundant null check for
     // something that is, in fact, built unconditionally right here.
-    const generationWiring = buildGenerationWiring({ vault, deviceId, now: this.now });
+    // `ol-zjke.2`: acceptance reads a held draft's hold from, and carries it to the new instrument
+    // in, the same citation store the slide-correction route writes (built later in `onload`).
+    const generationWiring = buildGenerationWiring({
+      vault,
+      deviceId,
+      now: this.now,
+      draftHolds: () => this.citationHashStore,
+    });
     this.generation = generationWiring;
 
     // F2.10's accept/dismiss verb pair (`[D-170]`/`[GEN-2]`, `ol-0r92.27`) —
@@ -1786,6 +1793,8 @@ export default class OleaPlugin extends Plugin {
               cache: generationWiring.cache,
               acceptPort: generationWiring.acceptPort,
               editPort: createObsidianEditPort(this.app),
+              // `ol-zjke.2`: a draft held for a lecturer's correction is not listed.
+              ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
             }),
           // `[D-216]`/`ol-mbh6`: the clearing row's source peek, mirroring
           // `ReviewView`'s own `instrumentId`-keyed call to the identical

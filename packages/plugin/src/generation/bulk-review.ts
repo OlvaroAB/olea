@@ -34,6 +34,13 @@
  * which ids succeeded and which did not, so a re-run only touches what is
  * still pending.
  *
+ * **A held draft is not listed (`ol-zjke.2`, decision sheet v87 row 4).** A pending draft whose
+ * draft hold key carries a current fact in the citation store (a lecturer's correction judged to
+ * invalidate its slide claim, `[D-473]`, `[D-625]`) is left out when the list is read, as the open
+ * session leaves it out, so it is never offered for accept, edit or the batch accept here. A draft
+ * held after the list was read and accepted anyway keeps its hold as an instrument
+ * (`accept.ts`). Read from the persisted store at every `load()`; no store supplied, nothing read.
+ *
  * **Keyboard bindings landed (`[D-216]` / `ol-egov.105`).** Move down the
  * list, keep, fix and bin are now real key bindings, resolved by
  * `bulk-review-keymap.ts`'s `resolveBulkReviewKey` and hinted on screen by
@@ -44,6 +51,10 @@
  * file changed to make the keys work.
  */
 
+import {
+  type CitationHashStore,
+  readHeldDraftIds,
+} from '../ingestion/materiality/citation-hash-store.js';
 import type { DraftAcceptPort } from './accept.js';
 import {
   type DeclaredMadeBy,
@@ -253,6 +264,11 @@ export interface BulkReviewControllerDeps {
   readonly cache: DraftCacheStore;
   readonly acceptPort: DraftAcceptPort;
   readonly editPort: BulkReviewEditPort;
+  /**
+   * `ol-zjke.2`: the citation store a draft's hold is read from (`main.ts` passes the plugin's one
+   * `ObsidianCitationHashStore`). Omitted: no hold is read, as before.
+   */
+  readonly citationHashStore?: CitationHashStore;
 }
 
 /**
@@ -272,7 +288,17 @@ export class BulkReviewController {
    * when the tab first opened.
    */
   async load(): Promise<void> {
-    this.records = [...(await this.deps.cache.listPending())];
+    const pending = await this.deps.cache.listPending();
+    // `ol-zjke.2`: a held draft is not listed (module doc). A store that cannot be read throws,
+    // never taken for "nothing held".
+    const held =
+      this.deps.citationHashStore === undefined || pending.length === 0
+        ? new Set<string>()
+        : await readHeldDraftIds(
+            this.deps.citationHashStore,
+            pending.map((record) => record.draftId),
+          );
+    this.records = pending.filter((record) => !held.has(record.draftId));
   }
 
   getViewModel(): BulkReviewViewModel {
