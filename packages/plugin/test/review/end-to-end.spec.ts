@@ -220,7 +220,15 @@ const NOT_A_FIXTURE_NOTE: readonly VaultPath[] = ['README.md'];
  * session clock, and the next review threw FSRS "Invalid delta_t -1". The
  * last describe block below pins that with a Date-only fake clock.
  */
-const NOW = new Date();
+// Pinned, not read from the wall clock (`ol-egov.141.89.10.142`, 2026-10-24). The fixture's
+// assignment due dates are real calendar dates, and which one is nearest (and so how many
+// items a round composes, and how many rounds the composed set takes to stand still) changes
+// as real time crosses them: crossing the 2026-10-23 due date took round 1 from eight items
+// to three and left four rounds short of the fixed point, so the CI run on 2026-10-24 failed
+// two assertions on a commit that had passed the day before. The product held throughout:
+// no round offered an instrument twice. A fixed instant keeps every assertion's meaning and
+// stops the spec moving with the calendar; 2026-10-22 is a day on which that due date is still ahead.
+const NOW = new Date(2026, 9, 22, 12, 0, 0);
 const TODAY = calendarDayFromLocalDate(NOW);
 const clock: Clock = { now: () => NOW };
 
