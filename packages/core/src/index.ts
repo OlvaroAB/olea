@@ -1299,6 +1299,22 @@ export type {
   PresentableMcq,
 } from './instrument/mcq-present.js';
 export { mathRandomSource, presentMcq } from './instrument/mcq-present.js';
+// `[D-407]` for a flashcard (`ol-egov.141.89.7.114`, sheet v87 row 5): a handed-off card's paper and
+// slot, kept under `.olea/paper-origins/` keyed by the card's instrument id, since a card's format has
+// no field line. Written by `./oracle/paper-store.js`'s `handOffPaperItem`; see the module's own doc.
+export type {
+  InstrumentPaperOrigin,
+  PaperOriginRecord,
+} from './instrument/paper-origin-store.js';
+export {
+  isPaperOriginRecord,
+  PAPER_ORIGIN_RECORD_SCHEMA_VERSION,
+  PAPER_ORIGIN_STORE_FOLDER,
+  paperOriginStorePath,
+  readInstrumentPaperOrigin,
+  removeInstrumentPaperOrigin,
+  writeInstrumentPaperOrigin,
+} from './instrument/paper-origin-store.js';
 // `[D-394]` choice 2's "answered" half: success derived at read time from an abstract qualifying
 // review-log event, never stored. Wiring the real review-log schema to this shape is a Class C
 // change this bead does not make — see `probe-outcome.ts`'s own module doc.
@@ -1828,6 +1844,7 @@ export type {
   FillPaperBlueprintResult,
   PaperEarlierPart,
   PaperGeneratedItem,
+  PaperItemCard,
   PaperItemGenerationPort,
   PaperItemGenerationRequest,
   PaperItemGenerationResult,
@@ -1835,6 +1852,7 @@ export type {
 } from './oracle/paper-items.js';
 export {
   fillPaperBlueprintSlots,
+  paperItemCardCandidate,
   paperItemEarlierPart,
   paperItemMcqCandidate,
 } from './oracle/paper-items.js';
@@ -1915,6 +1933,7 @@ export type {
 } from './oracle/paper-store.js';
 export {
   applyPaperEvent,
+  checkPaperItemHandoff,
   createPaper,
   handOffPaperItem,
   isAnswerRevealed,
@@ -1926,6 +1945,7 @@ export {
   PAPER_STATUSES,
   PAPER_STORE_FOLDER,
   paperCompositionAccountFromBlueprint,
+  paperItemCardBlockId,
   paperItemInstrumentId,
   paperRecordPath,
   recordPaperExplanationResult,

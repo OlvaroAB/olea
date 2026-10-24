@@ -20,7 +20,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { ReviewLogEntry } from 'olea-contracts';
-import type { UnitManifest, VaultSource } from 'olea-core';
+import type { UnitManifest, VaultPath, VaultSource } from 'olea-core';
 import {
   addManualAssessmentEntry,
   attachConceptToOutcome,
@@ -36,7 +36,9 @@ import {
   type PaperItemGenerationPort,
   type PaperItemGenerationRequest,
   type PaperRecord,
+  PAPER_ORIGIN_STORE_FOLDER,
   readInstrumentCitation,
+  readInstrumentPaperOrigin,
   resolveOutcome,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
@@ -530,6 +532,107 @@ describe('createLocalPracticePaperProvider — handOffItem()', () => {
     expect(content).toContain('Calvin cycle');
     // Two distinct instruments, one note.
     expect((content.match(/```olea-mcq/g) ?? []).length).toBe(2);
+  });
+
+  // ol-egov.141.89.7.114 (sheet v87 row 5): a flashcard item is entered as a Q&A card, its paper
+  // and slot in the side record, and a refused item leaves no home note behind.
+
+  function cardItem(overrides: Partial<PaperGeneratedItem> = {}): PaperGeneratedItem {
+    return quizItem({
+      taskId: 'cards.generate.v1',
+      response: {
+        result: {
+          cards: [{ front: 'What does the Krebs cycle produce?', back: 'ATP.', subject: 'Krebs cycle' }],
+        },
+      },
+      ...overrides,
+    });
+  }
+
+  /** `fakeVault` with the optional delete the hand-off's take-back needs, as `ObsidianSource` has. */
+  function deletingVault(): VaultSource {
+    const inner = fakeVault();
+    const gone = new Set<VaultPath>();
+    return {
+      list: async (options) => (await inner.list(options)).filter((path) => !gone.has(path)),
+      read: async (path) => {
+        if (gone.has(path)) throw new Error(`deletingVault: no such file ${path}`);
+        return inner.read(path);
+      },
+      readBinary: async (path) => inner.readBinary(path),
+      write: async (path, content) => {
+        gone.delete(path);
+        await inner.write(path, content);
+      },
+      exists: async (path) => !gone.has(path) && (await inner.exists(path)),
+      delete: async (path) => {
+        gone.add(path);
+      },
+      watch: (handler) => inner.watch(handler),
+    };
+  }
+
+  it('enters a flashcard item as one queueable Q&A card, its paper and slot beside it, and writes its citation sidecar', async () => {
+    const vault = deletingVault();
+    const record = await paperWithItems(vault, [cardItem()]);
+    const provider = createLocalPracticePaperProvider(baseDeps({ vault }));
+
+    const result = await provider.handOffItem('COURSEA', record.id, 'slot-0', 'Krebs cycle');
+
+    expect(result.instrumentWritten).toBe(true);
+    expect(result.record.handoffs.map((h) => h.slotId)).toEqual(['slot-0']);
+    const content = await vault.read(HANDOFF_NOTE_PATH);
+    expect(content).toContain('What does the Krebs cycle produce?\n?\nATP. ^');
+    expect(content).not.toContain('olea-mcq');
+    expect(content).not.toContain(record.id);
+    expect(content).toMatch(/topic:\s*\n\s*-\s*Krebs cycle/);
+    // It reaches her review: the vault walk finds it, bound to the concept, under the same id.
+    const walk = await enumerateVaultInstruments(vault);
+    const found = walk.records.filter((r) => r.instrumentId === result.instrumentId);
+    expect(found.map((r) => r.instrumentType)).toEqual(['qa']);
+    expect(await readInstrumentPaperOrigin(vault, result.instrumentId)).toEqual({
+      paperId: record.id,
+      slotId: 'slot-0',
+    });
+    const citation = await readInstrumentCitation(vault, result.instrumentId);
+    expect(citation?.sourcePath).toBe(HANDOFF_NOTE_PATH);
+
+    // [D-391]: a repeat changes nothing on disk.
+    const again = await provider.handOffItem('COURSEA', record.id, 'slot-0', 'Krebs cycle');
+    expect(again.instrumentWritten).toBe(false);
+    expect(again.instrumentId).toBe(result.instrumentId);
+    expect(await vault.read(HANDOFF_NOTE_PATH)).toBe(content);
+  });
+
+  it('a refused item leaves no home note, no card and no side record', async () => {
+    const vault = deletingVault();
+    const record = await paperWithItems(vault, [
+      cardItem({ response: { result: { cards: [] } } }),
+      quizItem({ slotId: 'slot-1', response: { result: { questions: [{ stem: 1 }] } } }),
+    ]);
+    const provider = createLocalPracticePaperProvider(baseDeps({ vault }));
+
+    await expect(
+      provider.handOffItem('COURSEA', record.id, 'slot-0', 'Krebs cycle'),
+    ).rejects.toThrow(/no card at index 0/);
+    await expect(
+      provider.handOffItem('COURSEA', record.id, 'slot-1', 'Krebs cycle'),
+    ).rejects.toThrow(/not a well-formed/);
+
+    expect(await vault.exists(HANDOFF_NOTE_PATH)).toBe(false);
+    expect(await vault.list({ under: PAPER_ORIGIN_STORE_FOLDER })).toEqual([]);
+    expect((await listPaperRecords(vault))[0]?.record.handoffs).toEqual([]);
+  });
+
+  it('a flashcard item on a vault that cannot delete is refused before the home note is written', async () => {
+    const vault = fakeVault();
+    const record = await paperWithItems(vault, [cardItem()]);
+    const provider = createLocalPracticePaperProvider(baseDeps({ vault }));
+
+    await expect(
+      provider.handOffItem('COURSEA', record.id, 'slot-0', 'Krebs cycle'),
+    ).rejects.toThrow(/cannot delete files/);
+    expect(await vault.exists(HANDOFF_NOTE_PATH)).toBe(false);
   });
 });
 

@@ -27,7 +27,9 @@ vi.mock('obsidian', () => {
   class El {
     text = '';
     cls = '';
+    disabled = false;
     readonly children: El[] = [];
+    readonly listeners: (() => void)[] = [];
     constructor(readonly tag: string) {}
     createEl(tag: string, options?: { text?: string; cls?: string }): El {
       const child = new El(tag);
@@ -43,7 +45,9 @@ vi.mock('obsidian', () => {
     empty(): void {
       this.children.length = 0;
     }
-    addEventListener(): void {}
+    addEventListener(_type: string, listener: () => void): void {
+      this.listeners.push(listener);
+    }
   }
   class ItemView {
     contentEl = new El('div');
@@ -87,10 +91,11 @@ describe('PaperView — the three ratified strings (David, 2026-09-27; docs/desi
     expect(SOURCE).toContain("'Already added to your ordinary review, from a practice paper.';");
   });
 
-  it('exports sheet v87 row 5’s stopgap sentence verbatim (David, 2026-10-24)', () => {
+  it('exports sheet v87 row 5’s failure sentence verbatim (David, 2026-10-24), and the stopgap is gone', () => {
     expect(SOURCE).toContain(
-      "export const PAPER_HANDOFF_FLASHCARD_NOT_YET = 'This flashcard can’t be added to your review yet.';",
+      "export const PAPER_HANDOFF_FAILED = 'This item couldn’t be added to your review. Please try again.';",
     );
+    expect(RAW_SOURCE).not.toContain('can’t be added to your review yet');
   });
 
   it('every sentence that states the record’s context uses the ratified phrase verbatim', () => {
@@ -141,7 +146,9 @@ describe('PaperView.renderHandoffControl — one item, one control, never the wh
     expect(RENDER_HANDOFF_CONTROL_BODY).toMatch(
       /createEl\('button',\s*\{\s*text:\s*PAPER_HANDOFF_BUTTON_LABEL\s*\}\)/,
     );
-    expect(RENDER_HANDOFF_CONTROL_BODY).toContain('void this.handOffItem(state, item, button);');
+    expect(RENDER_HANDOFF_CONTROL_BODY).toContain('void this.handOffItem(state, item, button, row);');
+    // No branch on the item's kind: a flashcard item is offered the same control (sheet v87 row 5).
+    expect(RENDER_HANDOFF_CONTROL_BODY).not.toContain('cards.generate.v1');
   });
 
   it('never offers a whole-paper hand-off: the file creates at most two buttons in total (pull paper, add to review)', () => {
@@ -173,8 +180,9 @@ describe('PaperView.handOffItem — calls olea-core’s handOffPaperItem (via de
     );
   });
 
-  it('a failed hand-off makes the control usable again and still surfaces the failure', () => {
+  it('a failed hand-off shows the ruled line in that row, makes the control usable again and still surfaces the failure', () => {
     const catchBody = HAND_OFF_ITEM_BODY.slice(HAND_OFF_ITEM_BODY.indexOf('} catch (error) {'));
+    expect(catchBody).toMatch(/row\.createEl\('p',\s*\{[^}]*text:\s*PAPER_HANDOFF_FAILED/);
     expect(catchBody).toContain('button.disabled = false;');
     expect(catchBody).toContain('throw error;');
   });
@@ -389,10 +397,15 @@ describe('PaperView — a paper with no recovered sections prints as before ([D-
   });
 });
 
-describe('PaperView — a flashcard item’s row (sheet v87 row 5, ol-egov.141.89.7.114)', () => {
-  it('the stopgap: a flashcard item says it cannot be added yet, and is offered no control', async () => {
+describe('PaperView — a flashcard item’s row and a failed hand-off (sheet v87 row 5, ol-egov.141.89.7.114)', () => {
+  interface ClickableEl extends MountedEl {
+    disabled: boolean;
+    readonly listeners: (() => void)[];
+  }
+
+  function cardState(): PracticePaperCourseState {
     const base = readyState(undefined) as unknown as { record: Record<string, unknown> };
-    const state = {
+    return {
       ...base,
       record: {
         ...base.record,
@@ -403,11 +416,86 @@ describe('PaperView — a flashcard item’s row (sheet v87 row 5, ol-egov.141.8
         ],
       },
     } as unknown as PracticePaperCourseState;
-    const lines = await mount(state);
-    expect(lines.filter((l) => l.includes('button "Add to review"'))).toHaveLength(2);
-    const skrit = lines.slice(lines.findIndex((l) => l.includes('"Skrit"')));
-    expect(skrit[2]).toBe(
-      '      p.olea-paper-handoff-unavailable "This flashcard can’t be added to your review yet."',
+  }
+
+  async function mountWith(handOffItem: (...args: unknown[]) => Promise<unknown>) {
+    const { PaperView } = await import('../../src/paper/view.js');
+    const state = cardState();
+    const view = new PaperView(
+      {} as never,
+      { load: async () => state, handOffItem } as never,
+      'Course Zarp',
     );
+    await view.refresh();
+    const root = (view as unknown as { contentEl: ClickableEl }).contentEl;
+    const rows = (root.children[1]?.children ?? []) as ClickableEl[];
+    const row = rows[1] as ClickableEl;
+    const button = row.children.find((c) => c.tag === 'button') as ClickableEl;
+    const items = (state as unknown as { items: readonly unknown[] }).items;
+    const press = () =>
+      (
+        view as unknown as {
+          handOffItem: (s: unknown, i: unknown, b: unknown, r: unknown) => Promise<void>;
+        }
+      ).handOffItem(state, items[1], button, row);
+    return { root, row, button, press };
+  }
+
+  it('a flashcard item is offered the same "Add to review" control as a question', async () => {
+    const lines = await mount(cardState());
+    expect(lines.filter((l) => l.includes('button "Add to review"'))).toHaveLength(3);
+    expect(lines.join('\n')).not.toContain('can’t be added');
+  });
+
+  it('the control’s click is wired to the hand-off with its own row', async () => {
+    const calls: unknown[][] = [];
+    const { button } = await mountWith(async (...args) => {
+      calls.push(args);
+      throw new Error('simulated failure');
+    });
+    expect(button.listeners).toHaveLength(1);
+  });
+
+  it('a failed hand-off says so once in that row, makes the control usable again, and no other row changes', async () => {
+    const { root, row, button, press } = await mountWith(async () => {
+      throw new Error('simulated failure');
+    });
+    const before = serialise(root);
+
+    await expect(press()).rejects.toThrow('simulated failure');
+    expect(button.disabled).toBe(false);
+    const failed = row.children.filter((c) => c.cls === 'olea-paper-handoff-failed');
+    expect(failed.map((c) => c.text)).toEqual([
+      'This item couldn’t be added to your review. Please try again.',
+    ]);
+
+    await expect(press()).rejects.toThrow('simulated failure');
+    expect(row.children.filter((c) => c.cls === 'olea-paper-handoff-failed')).toHaveLength(1);
+    // Every other line of the face is as it was: only the pressed row gained one line.
+    const after = serialise(root);
+    expect(after.length).toBe(before.length + 1);
+    expect(after.filter((l) => !l.includes('olea-paper-handoff-failed'))).toEqual(before);
+  });
+
+  it('pressing again after a failure hands off, and the row then reads the confirmation', async () => {
+    let fail = true;
+    const { root, press } = await mountWith(async (_c, _p, slotId) => {
+      if (fail) {
+        fail = false;
+        throw new Error('simulated failure');
+      }
+      return {
+        record: { id: 'paper-1', handoffs: [{ slotId }], items: [] },
+        instrumentId: 'i',
+        instrumentWritten: true,
+      };
+    });
+    await expect(press()).rejects.toThrow('simulated failure');
+    await press();
+    const lines = serialise(root).join('\n');
+    expect(lines).toContain(
+      'p.olea-paper-handoff-confirmation "Added to your ordinary review, from a practice paper."',
+    );
+    expect(lines).not.toContain('olea-paper-handoff-failed');
   });
 });

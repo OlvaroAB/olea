@@ -2,14 +2,21 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parseCards } from '../instrument/card-format.js';
 import { readInstrumentDemand } from '../instrument/demand-reading.js';
 import { insertMcqBlock, parseMcqBlocks } from '../instrument/mcq-format.js';
 import { acceptGeneratedMcq } from '../instrument/mcq-generated.js';
+import {
+  PAPER_ORIGIN_STORE_FOLDER,
+  paperOriginStorePath,
+  readInstrumentPaperOrigin,
+} from '../instrument/paper-origin-store.js';
 import {
   instrumentTargetStorePath,
   questionBindingOf,
   readInstrumentTarget,
 } from '../instrument/target-store.js';
+import { enumerateVaultInstruments } from '../session/enumerate.js';
 import { FolderSource } from '../vault/folder-source.js';
 import { type PaperGeneratedItem, paperItemMcqCandidate } from './paper-items.js';
 import type { PaperCompositionAccount, PaperRecord } from './paper-store.js';
@@ -22,6 +29,7 @@ import {
   listPaperRecords,
   OPAQUE_PAPER_ID_PREFIX,
   PAPER_STORE_FOLDER,
+  paperItemCardBlockId,
   paperItemInstrumentId,
   paperRecordPath,
   recordPaperExplanationResult,
@@ -409,12 +417,14 @@ describe('handOffPaperItem — enters the item as an instrument naming its paper
     expect(afterRemoval?.paperOrigin).toEqual({ paperId: paper.id, slotId: 'slot-0' });
   });
 
-  it('refuses, writing nothing, a card item, a missing question, a malformed body or an unknown slot', async () => {
+  it('refuses, writing nothing, a flashcard item with no cards, a missing question, a malformed body or an unknown slot', async () => {
     const paper = await createPaper(vault, {
       course: 'COURSEA',
       asOf: '2026-09-16',
       compositionAccount: ACCOUNT,
       items: [
+        // A flashcard item is entered as a card (sheet v87 row 5); one whose body holds questions
+        // and no cards has nothing to enter.
         item({ slotId: 'slot-card', taskId: 'cards.generate.v1' }),
         item({ slotId: 'slot-quiz' }),
         item({ slotId: 'slot-bad', response: { ok: true, result: { questions: [{ stem: 1 }] } } }),
@@ -424,7 +434,7 @@ describe('handOffPaperItem — enters the item as an instrument naming its paper
     const paperBefore = await readFile(join(root, paperRecordPath(paper.id)), 'utf8');
 
     await expect(handOffPaperItem(vault, paper.id, 'slot-card', TARGET)).rejects.toThrow(
-      /cards\.generate\.v1/,
+      /no cards\.generate\.v1 cards/,
     );
     await expect(
       handOffPaperItem(vault, paper.id, 'slot-quiz', { notePath: NOTE_PATH, questionIndex: 2 }),
@@ -942,12 +952,12 @@ describe('handOffPaperItem — writes the instrument target record for a demand 
     expect(await targetFiles()).toEqual([]);
   });
 
-  it('a refused hand-off (a card item, an unknown slot) writes no record', async () => {
+  it('a refused hand-off (a flashcard item with no cards, an unknown slot) writes no record', async () => {
     const paper = await paperWith(READ_ACCOUNT, {
       items: [item({ slotId: 'slot-card', taskId: 'cards.generate.v1' })],
     });
     await expect(handOffPaperItem(vault, paper.id, 'slot-card', TARGET)).rejects.toThrow(
-      /cards\.generate\.v1/,
+      /no cards\.generate\.v1 cards/,
     );
     await expect(handOffPaperItem(vault, paper.id, 'slot-nope', TARGET)).rejects.toThrow(
       /not an item/,
@@ -1064,5 +1074,334 @@ describe('handOffPaperItem — a structured paper ([D-430]) reads the demand on 
     const result = await handOffPaperItem(vault, paper.id, 'slot-9', TARGET);
     expect(result.instrumentWritten).toBe(true);
     expect((await readInstrumentTarget(vault, result.instrumentId)).kind).toBe('absent');
+  });
+});
+
+// The Worker body for a `cards.generate.v1` slot: the success envelope, with the cards under
+// `result`. Synthetic content only.
+const CARD_RESPONSE = {
+  ok: true,
+  stamp: { contractVersion: 2, promptVersion: 'v1', modelId: 'stub' },
+  result: {
+    cards: [
+      {
+        front: 'What does synthetic layer A record?',
+        back: 'The first deposit.',
+        subject: 'Topic one',
+      },
+      { front: 'Name the second synthetic process.', back: 'Process B.', subject: 'Topic one' },
+    ],
+  },
+};
+
+describe('handOffPaperItem — a flashcard item enters as a Q&A card, its origin in a side record (sheet v87 row 5)', () => {
+  let root: string;
+  let vault: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-paper-handoff-card-'));
+    vault = new FolderSource(root);
+    await vault.write(NOTE_PATH, NOTE);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  function cardItem(overrides: Partial<PaperGeneratedItem> & { slotId: string }) {
+    return item({ taskId: 'cards.generate.v1', response: CARD_RESPONSE, ...overrides });
+  }
+
+  async function cardPaper(
+    account: object = ACCOUNT,
+    items: readonly PaperGeneratedItem[] = [
+      cardItem({ slotId: 'slot-0' }),
+      item({ slotId: 'slot-1' }),
+    ],
+  ): Promise<PaperRecord> {
+    return createPaper(vault, {
+      course: 'COURSEA',
+      asOf: '2026-09-16',
+      compositionAccount: account as PaperCompositionAccount,
+      items,
+      emptySlots: [],
+    });
+  }
+
+  async function noteCards() {
+    return parseCards(await vault.read(NOTE_PATH)).filter((c) => c.type === 'qa');
+  }
+
+  async function originFiles(): Promise<string[]> {
+    try {
+      return (await readdir(join(root, PAPER_ORIGIN_STORE_FOLDER))).sort();
+    } catch {
+      return [];
+    }
+  }
+
+  async function targetFiles(): Promise<string[]> {
+    try {
+      return (await readdir(join(root, '.olea/instrument-targets'))).sort();
+    } catch {
+      return [];
+    }
+  }
+
+  async function storedHandoffs(paperId: string) {
+    const stored = (await listPaperRecords(vault)).find((r) => r.record.id === paperId)?.record;
+    return stored?.handoffs.map((h) => h.slotId);
+  }
+
+  /** Makes the next write to `path` throw, once. */
+  function failNextWriteTo(path: string): void {
+    const realWrite = vault.write.bind(vault);
+    let armed = true;
+    vault.write = async (p, content) => {
+      if (armed && p === path) {
+        armed = false;
+        throw new Error('simulated write failure');
+      }
+      return realWrite(p, content);
+    };
+  }
+
+  it('writes exactly one Q&A card after the frontmatter, its paper and slot in the side record, every other byte kept', async () => {
+    const paper = await cardPaper();
+
+    const result = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+
+    const content = await vault.read(NOTE_PATH);
+    const cards = await noteCards();
+    expect(cards).toHaveLength(1);
+    const [entered] = cards;
+    expect(entered?.front).toBe('What does synthetic layer A record?');
+    expect(entered?.back).toBe('The first deposit.');
+    expect(entered?.type === 'qa' ? entered.blockId : null).toBe(
+      await paperItemCardBlockId(paper.id, 'slot-0'),
+    );
+    expect(result.instrumentWritten).toBe(true);
+    expect(await readInstrumentPaperOrigin(vault, result.instrumentId)).toEqual({
+      paperId: paper.id,
+      slotId: 'slot-0',
+    });
+    expect(await originFiles()).toEqual([
+      paperOriginStorePath(result.instrumentId).split('/').pop(),
+    ]);
+    // No quiz block, and no origin text in her note: the origin lives beside the card.
+    expect(parseMcqBlocks(content).instruments).toEqual([]);
+    expect(content).not.toContain(paper.id);
+    // Frontmatter still opens the note, and removing the card recovers her note exactly.
+    expect(content.startsWith('---\ntopic: Topic one\n')).toBe(true);
+    expect(content.replace(`${entered?.raw}\n`, '')).toBe(NOTE);
+    expect(await storedHandoffs(paper.id)).toEqual(['slot-0']);
+  });
+
+  it('enters the card the caller names, not a default one', async () => {
+    const paper = await cardPaper();
+    await handOffPaperItem(vault, paper.id, 'slot-0', { notePath: NOTE_PATH, questionIndex: 1 });
+    const [entered] = await noteCards();
+    expect(entered?.front).toBe('Name the second synthetic process.');
+  });
+
+  it('[D-391] 1: the card a vault walk finds is the instrument the hand-off named, and its record names paper and slot', async () => {
+    const paper = await cardPaper();
+    const { instrumentId } = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+
+    const walk = await enumerateVaultInstruments(vault);
+    // Bound to the note's concept, so it reaches the review queue, not the unbound report.
+    const found = walk.records.filter((r) => r.instrumentId === instrumentId);
+    expect(walk.unbound).toEqual([]);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.instrumentType).toBe('qa');
+    expect(await readInstrumentPaperOrigin(vault, instrumentId)).toEqual({
+      paperId: paper.id,
+      slotId: 'slot-0',
+    });
+    // Distinct slots and distinct papers never share a block id.
+    expect(await paperItemCardBlockId(paper.id, 'slot-1')).not.toBe(
+      await paperItemCardBlockId(paper.id, 'slot-0'),
+    );
+    expect(await paperItemCardBlockId('paper-key1:other', 'slot-0')).not.toBe(
+      await paperItemCardBlockId(paper.id, 'slot-0'),
+    );
+  });
+
+  it('[D-391] 2: a double press yields one card, one origin record and one hand-off, the note untouched the second time', async () => {
+    const paper = await cardPaper();
+    const first = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+    const afterFirst = await vault.read(NOTE_PATH);
+
+    const second = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+
+    expect(second.instrumentWritten).toBe(false);
+    expect(second.instrumentId).toBe(first.instrumentId);
+    expect(await vault.read(NOTE_PATH)).toBe(afterFirst);
+    expect(await noteCards()).toHaveLength(1);
+    expect(await originFiles()).toHaveLength(1);
+    expect(second.record.handoffs).toHaveLength(1);
+  });
+
+  it('[D-391] 2: a retry after an attempt stopped once the note was written converges on one card and one hand-off', async () => {
+    const paper = await cardPaper();
+    const paperBefore = await vault.read(paperRecordPath(paper.id));
+    await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+    // A stop between the note write and the paper write leaves the card and its record, and the
+    // paper as it was: the state this restores.
+    await vault.write(paperRecordPath(paper.id), paperBefore);
+    const afterNote = await vault.read(NOTE_PATH);
+    expect(await storedHandoffs(paper.id)).toEqual([]);
+
+    const retry = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+
+    expect(retry.instrumentWritten).toBe(false);
+    expect(await vault.read(NOTE_PATH)).toBe(afterNote);
+    expect(await noteCards()).toHaveLength(1);
+    expect(await originFiles()).toHaveLength(1);
+    expect(retry.record.handoffs.map((h) => h.slotId)).toEqual(['slot-0']);
+  });
+
+  it('a failed note write leaves neither a card nor an origin record, and a retry succeeds as a first hand-off', async () => {
+    const paper = await cardPaper();
+    failNextWriteTo(NOTE_PATH);
+
+    await expect(handOffPaperItem(vault, paper.id, 'slot-0', TARGET)).rejects.toThrow(
+      'simulated write failure',
+    );
+    expect(await vault.read(NOTE_PATH)).toBe(NOTE);
+    expect(await originFiles()).toEqual([]);
+    expect(await storedHandoffs(paper.id)).toEqual([]);
+
+    const retry = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+    expect(retry.instrumentWritten).toBe(true);
+    expect(await noteCards()).toHaveLength(1);
+    expect(await originFiles()).toHaveLength(1);
+    expect(await storedHandoffs(paper.id)).toEqual(['slot-0']);
+  });
+
+  it('a failed paper write takes the card and its origin record back out of the vault', async () => {
+    const paper = await cardPaper();
+    failNextWriteTo(paperRecordPath(paper.id));
+
+    await expect(handOffPaperItem(vault, paper.id, 'slot-0', TARGET)).rejects.toThrow(
+      'simulated write failure',
+    );
+    expect(await vault.read(NOTE_PATH)).toBe(NOTE);
+    expect(await originFiles()).toEqual([]);
+    expect(await storedHandoffs(paper.id)).toEqual([]);
+
+    const retry = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+    expect(retry.instrumentWritten).toBe(true);
+    expect(await noteCards()).toHaveLength(1);
+  });
+
+  it('a failed note write also takes back the target record the attempt wrote for a demand the paper read', async () => {
+    const paper = await cardPaper(READ_ACCOUNT);
+    failNextWriteTo(NOTE_PATH);
+
+    await expect(handOffPaperItem(vault, paper.id, 'slot-0', TARGET)).rejects.toThrow(
+      'simulated write failure',
+    );
+    expect(await targetFiles()).toEqual([]);
+    expect(await originFiles()).toEqual([]);
+
+    const retry = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+    expect(await targetFiles()).toEqual([encodeURIComponent(retry.instrumentId).concat('.json')]);
+  });
+
+  it('writes the target record for a demand the paper read, bound to the card as entered', async () => {
+    const paper = await cardPaper(READ_ACCOUNT);
+    const { instrumentId } = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+    const target = await readInstrumentTarget(vault, instrumentId);
+    expect(target.kind).toBe('record');
+    if (target.kind !== 'record') return;
+    expect(target.record.origin).toBe('paper-handoff');
+    expect(target.record.declaredDemand).toBe('recall-a-fact');
+    const [entered] = await noteCards();
+    if (entered?.type !== 'qa') throw new Error('no card was entered');
+    expect(target.record.questionBinding).toBe(await questionBindingOf(entered));
+  });
+
+  it('a repeat after she moved or removed the card writes nothing', async () => {
+    const paper = await cardPaper();
+    await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+    await vault.write(NOTE_PATH, NOTE);
+
+    const repeat = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+
+    expect(repeat.instrumentWritten).toBe(false);
+    expect(await vault.read(NOTE_PATH)).toBe(NOTE);
+    expect(repeat.record.handoffs).toHaveLength(1);
+  });
+
+  it('a repeat restores a missing origin record for the card it entered, and changes no note byte', async () => {
+    const paper = await cardPaper();
+    const { instrumentId } = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+    const afterFirst = await vault.read(NOTE_PATH);
+    await rm(join(root, paperOriginStorePath(instrumentId)));
+
+    const repair = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+
+    expect(repair.instrumentWritten).toBe(false);
+    expect(await vault.read(NOTE_PATH)).toBe(afterFirst);
+    expect(await readInstrumentPaperOrigin(vault, instrumentId)).toEqual({
+      paperId: paper.id,
+      slotId: 'slot-0',
+    });
+  });
+
+  it("refuses, writing nothing, a card at the derived block id that is not this item's", async () => {
+    const paper = await cardPaper();
+    const blockId = await paperItemCardBlockId(paper.id, 'slot-0');
+    const foreign = `${NOTE}\nHer own question\n?\nHer own answer ^${blockId}\n`;
+    await vault.write(NOTE_PATH, foreign);
+
+    await expect(handOffPaperItem(vault, paper.id, 'slot-0', TARGET)).rejects.toThrow(
+      /not this item's card/,
+    );
+    expect(await vault.read(NOTE_PATH)).toBe(foreign);
+    expect(await originFiles()).toEqual([]);
+  });
+
+  it('refuses, writing nothing, a card index out of range, a blank side, text that would not read back, or a vault that cannot delete', async () => {
+    const paper = await cardPaper(ACCOUNT, [
+      cardItem({ slotId: 'slot-0' }),
+      cardItem({
+        slotId: 'slot-blank',
+        response: { ok: true, result: { cards: [{ front: 'A question', back: '  ' }] } },
+      }),
+      cardItem({
+        slotId: 'slot-structure',
+        response: { ok: true, result: { cards: [{ front: 'One line\n?\nanother', back: 'B' }] } },
+      }),
+    ]);
+    const paperBefore = await readFile(join(root, paperRecordPath(paper.id)), 'utf8');
+
+    await expect(
+      handOffPaperItem(vault, paper.id, 'slot-0', { notePath: NOTE_PATH, questionIndex: 2 }),
+    ).rejects.toThrow(/no card at index 2/);
+    await expect(handOffPaperItem(vault, paper.id, 'slot-blank', TARGET)).rejects.toThrow(
+      /not a well-formed card/,
+    );
+    await expect(handOffPaperItem(vault, paper.id, 'slot-structure', TARGET)).rejects.toThrow(
+      /would not read back as the same card/,
+    );
+    const noDelete = new FolderSource(root);
+    Object.defineProperty(noDelete, 'delete', { value: undefined });
+    await expect(handOffPaperItem(noDelete, paper.id, 'slot-0', TARGET)).rejects.toThrow(
+      /cannot delete files/,
+    );
+
+    expect(await vault.read(NOTE_PATH)).toBe(NOTE);
+    expect(await originFiles()).toEqual([]);
+    expect(await readFile(join(root, paperRecordPath(paper.id)), 'utf8')).toBe(paperBefore);
+  });
+
+  it('a quiz item on the same paper still enters as a quiz block with its own field and no side record', async () => {
+    const paper = await cardPaper();
+    await handOffPaperItem(vault, paper.id, 'slot-1', TARGET);
+    const [entered] = parseMcqBlocks(await vault.read(NOTE_PATH)).instruments;
+    expect(entered?.paperOrigin).toEqual({ paperId: paper.id, slotId: 'slot-1' });
+    expect(await originFiles()).toEqual([]);
   });
 });
