@@ -129,7 +129,7 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     // The partner names the OTHER end from the subject; retrieval takes its WORDING (a query),
     // and the material takes its KEY (an identity) — `ol-egov.141.89.6.74`.
     expect(body).toMatch(
-      /const \{ edge, neighbourConceptId, neighbourName \} = partner;\s*neighbourBlocks = await deps\.retrieveSourceBlocks\(neighbourName\);/,
+      /const \{ edge, neighbourConceptId, neighbourName \} = partner;\s*neighbourBlocks = protectTranscriptPassages\(\s*await deps\.retrieveSourceBlocks\(neighbourName, courseCode\),/,
     );
     expect(body).toMatch(/named = \{\s*neighbourConceptId,/);
     expect(body).toMatch(/conceptId: named\.neighbourConceptId,/);

@@ -67,6 +67,7 @@ import {
   buildGradingSourceMaterial,
   type ConceptDefiningPassages,
   type ConceptRelation,
+  chunkSourceLocation,
   type ExplainBackFeedbackShownLogRecordInput,
   type ExplainBackPromptContext,
   type ExplainBackSetAsideLogRecordInput,
@@ -85,6 +86,7 @@ import type {
 } from '../grading/wiring.js';
 import { EXPLAIN_WHY_UNAVAILABLE } from '../review/copy.js';
 import type { ReviewInstrument } from '../review/types.js';
+import type { SourceOriginFrontmatterHost } from '../source-origin.js';
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
   EXPLAIN_BACK_ANSWER_PLACEHOLDER,
@@ -114,11 +116,13 @@ import { practiceExplanationInput, type RecordViewPracticeExplanation } from './
 import {
   buildExplainBackPromptContextFromInstrument,
   buildExplainBackPromptContextFromTopic,
+  type ExplainBackPassageRole,
   type ExplainBackRelationPartner,
   type ExplainBackSourceBlock,
   type FreeformTopicConceptMatch,
 } from './request.js';
 import { canRecordNonAttempt, EXPLAIN_BACK_SKIP_LABEL } from './skip.js';
+import { protectTranscriptPassages } from './transcript-protections.js';
 
 /**
  * `ol-0r92.98`: an empty or whitespace-only typed answer, exported so the
@@ -155,7 +159,16 @@ export interface ExplainBackModalDeps {
    * is resolved, never after she submits, so the passages she reads are the
    * ones the prompt already carries.
    */
-  readonly retrieveSourceBlocks: (query: string) => Promise<readonly ExplainBackSourceBlock[]>;
+  readonly retrieveSourceBlocks: (
+    query: string,
+    courseCode?: string | null,
+  ) => Promise<readonly ExplainBackSourceBlock[]>;
+  /**
+   * `[D-633]`: the host's cached frontmatter, for the transcript protections applied to a shown
+   * passage (`./transcript-protections.ts`): whether a `.md` is a supplied transcript, and the
+   * lecture's terms. Optional: absent, a `.md` reads as not a transcript, as in drafting.
+   */
+  readonly sourceOriginHost?: SourceOriginFrontmatterHost;
   /**
    * `[D-322]` (`ol-egov.141.89.6.4`): resolves a freeform topic prompt (command palette or Home,
    * naming no subject) to one concept at composition time, BEFORE she answers. Delegates entirely
@@ -501,11 +514,18 @@ export interface ResolvedGradingSourceBlocks {
 export async function resolveGradingSourceBlocks(
   deps: Pick<
     ExplainBackModalDeps,
-    'retrieveSourceBlocks' | 'resolveCausesPartner' | 'resolveIntroducingPassage'
+    | 'retrieveSourceBlocks'
+    | 'resolveCausesPartner'
+    | 'resolveIntroducingPassage'
+    | 'sourceOriginHost'
   >,
   subjectConceptId: string | null,
-  sourceBlocks: readonly ExplainBackSourceBlock[],
+  rawSourceBlocks: readonly ExplainBackSourceBlock[],
+  courseCode: string | null = null,
 ): Promise<ResolvedGradingSourceBlocks> {
+  // `[D-633]`: a transcript passage is shown only as far as it may ground (C3.6); the protections
+  // run once, here, on every passage the lookup collects, before anything is built from them.
+  const sourceBlocks = protectTranscriptPassages(rawSourceBlocks, deps.sourceOriginHost);
   const partner =
     subjectConceptId !== null ? deps.resolveCausesPartner?.(subjectConceptId) : undefined;
 
@@ -514,17 +534,35 @@ export async function resolveGradingSourceBlocks(
     | undefined;
   let neighbourBlocks: readonly ExplainBackSourceBlock[] = [];
   let introducingBlocks: readonly ExplainBackSourceBlock[] = [];
+  /** `[D-633]`: link passages that were also retrieved, so left out of `introducingBlocks`. */
+  const alsoLinkPassages: ExplainBackSourceBlock[] = [];
   let relationNames: ResolvedGradingSourceBlocks['relationNames'];
   if (partner !== undefined && subjectConceptId !== null) {
     // The partner is the OTHER end of the edge from the subject, named by key (an identity) and by
     // wording (a query): retrieval takes the wording, everything that identifies takes the key.
     const { edge, neighbourConceptId, neighbourName } = partner;
-    neighbourBlocks = await deps.retrieveSourceBlocks(neighbourName);
+    // `[D-633]`: the neighbour is looked up within the same course as the subject.
+    neighbourBlocks = protectTranscriptPassages(
+      await deps.retrieveSourceBlocks(neighbourName, courseCode),
+      deps.sourceOriginHost,
+    );
     relationNames = { concept: partner.subjectName, neighbour: neighbourName };
     const alreadyPresentBlockIds = new Set(
       [...sourceBlocks, ...neighbourBlocks].map((entry) => entry.block.blockId),
     );
-    introducingBlocks = await resolveEdgeIntroducingPassages(deps, edge, alreadyPresentBlockIds);
+    // `[D-633]`: a link passage that was also retrieved is not sent twice (it stays in the
+    // subject's or neighbour's list), but it is still one of the link's own passages, which the
+    // shown passage keeps as context (`alsoLinkPassages`).
+    const linkBlocks = protectTranscriptPassages(
+      await resolveEdgeIntroducingPassages(deps, edge, new Set()),
+      deps.sourceOriginHost,
+    );
+    introducingBlocks = linkBlocks.filter(
+      (entry) => !alreadyPresentBlockIds.has(entry.block.blockId),
+    );
+    alsoLinkPassages.push(
+      ...linkBlocks.filter((entry) => alreadyPresentBlockIds.has(entry.block.blockId)),
+    );
     named = {
       neighbourConceptId,
       edge: {
@@ -568,10 +606,19 @@ export async function resolveGradingSourceBlocks(
   for (const entry of [...sourceBlocks, ...neighbourBlocks, ...introducingBlocks]) {
     lookup.set(entry.block.blockId, entry);
   }
-  const flattenedSourceBlocks = material.sourceBlocks.flatMap((block) => {
-    const entry = lookup.get(block.blockId);
-    return entry ? [entry] : [];
-  });
+  const flattenedSourceBlocks = dedupeShownPassages(
+    material.sourceBlocks.flatMap((block) => {
+      const entry = lookup.get(block.blockId);
+      return entry ? [entry] : [];
+    }),
+    named === undefined
+      ? { subject: [], link: [], neighbour: [] }
+      : {
+          subject: sourceBlocks,
+          link: [...introducingBlocks, ...alsoLinkPassages],
+          neighbour: neighbourBlocks,
+        },
+  );
   return {
     sourceBlocks: flattenedSourceBlocks,
     sourceMaterial: material,
@@ -579,6 +626,36 @@ export async function resolveGradingSourceBlocks(
     neighbourConceptId: named?.neighbourConceptId,
     relationNames: relation.kind === 'relation' ? relationNames : undefined,
   };
+}
+
+/**
+ * `[D-633]`: a block found more than once (the subject's search, the neighbour's search, and the
+ * link's own passages can all return it) is shown once. The rule: one display per block, keyed by
+ * its source and position (`path` and `blockIndex`), at the first place it occurs in the
+ * relation's order (subject, link, neighbour); the kept block records every way it was found
+ * (`foundAs`), so that it is also one of the link's own passages is not lost. A block found once
+ * is returned as it was, with no `foundAs` unless the lookup was a relation's.
+ */
+function dedupeShownPassages(
+  shown: readonly ExplainBackSourceBlock[],
+  roles: Readonly<Record<ExplainBackPassageRole, readonly ExplainBackSourceBlock[]>>,
+): readonly ExplainBackSourceBlock[] {
+  const keyOf = (entry: ExplainBackSourceBlock): string => `${entry.path}\u0000${entry.blockIndex}`;
+  const keysByRole = {
+    subject: new Set(roles.subject.map(keyOf)),
+    link: new Set(roles.link.map(keyOf)),
+    neighbour: new Set(roles.neighbour.map(keyOf)),
+  };
+  const kept = new Map<string, ExplainBackSourceBlock>();
+  for (const entry of shown) {
+    const key = keyOf(entry);
+    if (kept.has(key)) continue;
+    const found = (['subject', 'link', 'neighbour'] as const).filter((role) =>
+      keysByRole[role].has(key),
+    );
+    kept.set(key, found.length === 0 ? entry : { ...entry, foundAs: found });
+  }
+  return [...kept.values()];
 }
 
 /** No search ran (`[D-629]`): nothing retrieved, a concept prompt, no relation resolved. */
@@ -767,7 +844,8 @@ export class ExplainBackModal extends Modal {
         : await resolveGradingSourceBlocks(
             this.deps,
             subjectConceptId,
-            await this.deps.retrieveSourceBlocks(questionQuery(instrument)),
+            await this.deps.retrieveSourceBlocks(questionQuery(instrument), instrument.courseCode),
+            instrument.courseCode,
           );
     const prompt: ResolvedPrompt = {
       question: buildExplainBackPromptContextFromInstrument(instrument, lookup.sourceBlocks)
@@ -1280,7 +1358,8 @@ export class ExplainBackModal extends Modal {
  * the note is unknown, never an invented source.
  */
 function passageSourceLabel(passage: ExplainBackSourceBlock): string | null {
-  return passage.path.trim() === '' ? null : formatSourceCitation({ sourcePath: passage.path });
+  // `[D-633]`: with the page, part or time its source has, through the one formatter.
+  return passage.path.trim() === '' ? null : formatSourceCitation(chunkSourceLocation(passage));
 }
 
 function questionQuery(instrument: ReviewInstrument): string {

@@ -92,7 +92,9 @@ describe('v0.9: the one retrieval is made when the question is resolved, with th
       'private async resolveInstrumentPrompt(',
       'private async resolveTopicPrompt(',
     );
-    expect(body).toMatch(/await this\.deps\.retrieveSourceBlocks\(questionQuery\(instrument\)\)/);
+    expect(body).toMatch(
+      /await this\.deps\.retrieveSourceBlocks\(\s*questionQuery\(instrument\),\s*instrument\.courseCode,?\s*\)/,
+    );
     expect(body).not.toMatch(/retrieveSourceBlocks\([^)]*\bquestion\b/);
   });
 

@@ -116,6 +116,7 @@ import {
   retrieveExplainBackSourceBlocks,
 } from './explain-back/request.js';
 import { resolveIntroducingPassageFromVault } from './explain-back/resolve-introducing-passage.js';
+import { explainBackSearchConfigured } from './explain-back/search-available.js';
 import {
   createReadLoggedAttemptState,
   createRecordSetAsideAttempt,
@@ -4779,6 +4780,7 @@ export default class OleaPlugin extends Plugin {
    */
   private async composeExplainBackSourceBlocks(
     query: string,
+    courseCode?: string | null,
   ): Promise<readonly ExplainBackSourceBlock[]> {
     const embeddingCache = this.retrieval?.embeddingCache;
     const embeddingProvider = this.retrieval?.embeddingProvider;
@@ -4806,9 +4808,28 @@ export default class OleaPlugin extends Plugin {
         // `ol-egov.141.89.6.74`: the live concept records, for the same completeness
         // (`retrieveExplainBackSourceBlocks` never reads it) and the same thunk reason.
         conceptRecords: () => this.conceptRecords,
+        // `[D-633]`: the course reading set's frontmatter links, the same host drafting gets.
+        frontmatterHost: this.sourceOriginFrontmatterHost(),
       },
       query,
+      // `[D-633]`: the instrument's course; `undefined` for a free-form topic (no instrument).
+      courseCode,
     );
+  }
+
+  /**
+   * `[D-629]`: whether a passage search can run at all. `false` without a Worker (no embedding
+   * provider or cache, which `retrieval/wiring.ts` leaves `null` until a token is pasted, F7.8) or
+   * before the keyword index exists; the practice view then says it is unavailable instead of
+   * reporting a search that found nothing. The same three conditions
+   * `composeExplainBackSourceBlocks` above returns `[]` on.
+   */
+  private explainBackSearchAvailable(): boolean {
+    return explainBackSearchConfigured({
+      embeddingCache: this.retrieval?.embeddingCache,
+      embeddingProvider: this.retrieval?.embeddingProvider,
+      keywordIndex: this.keywordIndex,
+    });
   }
 
   /**
@@ -5178,7 +5199,13 @@ export default class OleaPlugin extends Plugin {
         grade: (input) => this.gradeExplainBackAttempt(input),
         acceptWithObservation: (pending, context) =>
           this.acceptExplainBackGradingWithObservation(pending, context),
-        retrieveSourceBlocks: (query) => this.composeExplainBackSourceBlocks(query),
+        retrieveSourceBlocks: (query, courseCode) =>
+          this.composeExplainBackSourceBlocks(query, courseCode),
+        // `[D-629]`: with no Worker configured the view says it is unavailable, never
+        // that a search found nothing.
+        searchAvailable: () => this.explainBackSearchAvailable(),
+        // `[D-633]`: the transcript protections on a shown passage read the same host drafting does.
+        sourceOriginHost: this.sourceOriginFrontmatterHost(),
         // `ol-egov.141.89.6.33`: the resolved-neighbour half —
         // `resolveGradingSourceBlocks` (`explain-back/modal.ts`) calls this
         // to find a live 'causes' partner for the subject before threading
