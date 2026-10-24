@@ -225,9 +225,10 @@ export const SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL = 'Explain it back';
 //
 // **v0.9 (`[D-603]`):** the explain-back view is ungraded practice. It calls no
 // grader, never renders `EXPLAIN_BACK_CHECK_FAILED_REFUSAL`, and renders
-// `explainBackInsufficientNotesRefusal` only for a free-form topic with nothing
-// to explain against, whose grading wording waits on `[D-629]`. The update
-// below describes the graded path, dormant in v0.9.
+// `explainBackInsufficientNotesRefusal` no more: its wording promises grading, and
+// `[D-629]` replaced it on the practice view with registry section 39's
+// no-passages line (`../explain-back/copy.ts`). The update below describes the
+// graded path, dormant in v0.9.
 //
 // **UPDATE ([STY-0h] / `ol-l5og.18.8`): a production caller now renders both
 // strings, and the paragraph below is stale against it.** `ExplainBackModal`

@@ -83,19 +83,19 @@ import type {
   AcceptExplainBackGradingWithObservationContext,
   AcceptExplainBackGradingWithObservationResult,
 } from '../grading/wiring.js';
-import { explainBackInsufficientNotesRefusal } from '../review/copy.js';
+import { EXPLAIN_WHY_UNAVAILABLE } from '../review/copy.js';
 import type { ReviewInstrument } from '../review/types.js';
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
   EXPLAIN_BACK_ANSWER_PLACEHOLDER,
   EXPLAIN_BACK_DISCARD_LABEL,
   EXPLAIN_BACK_DONE_LABEL,
-  EXPLAIN_BACK_FOUND_LIST_CAPTION,
   EXPLAIN_BACK_MODAL_TITLE,
-  EXPLAIN_BACK_NOTHING_MATCHED_EYEBROW,
+  EXPLAIN_BACK_NO_PASSAGES_FOUND,
   EXPLAIN_BACK_PASSAGES_HEADING,
   EXPLAIN_BACK_PRACTICE_NOTICE,
   EXPLAIN_BACK_QUESTION_LABEL,
+  EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
   EXPLAIN_BACK_SUBMIT_LABEL,
   EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
   EXPLAIN_BACK_TOPIC_PROMPT,
@@ -294,6 +294,22 @@ export interface ExplainBackModalDeps {
    * test. Defaults to the one every view in this plugin session shares.
    */
   readonly feedbackExposureLedger?: FeedbackExposureLedger;
+  /**
+   * `[D-629]`: whether a passage search can run at all (a Worker and its retrieval are configured).
+   * `false` means NO search ran, so the view says it is unavailable (`EXPLAIN_WHY_UNAVAILABLE`) and
+   * never the no-passages line, which reports a completed search only. Optional: absent reads as
+   * `true`, a search that completes. A search that throws is left as it was (no ruled words for it).
+   */
+  readonly searchAvailable?: () => boolean;
+  /**
+   * Sheet v87 row 6: leads to her explain-back history, the registry entry (F8.4b), for the link
+   * the view shows after she submits. Optional: absent, the registry's own opener
+   * (`../registry/obsidian-ports.ts`, the one the graded view used) is loaded on demand.
+   */
+  readonly openHistory?: (target: {
+    readonly instrumentId?: string;
+    readonly conceptKey?: string;
+  }) => void | Promise<void>;
   /** Fires once, on close, however the modal was resolved — see the module doc's "hand-off" section. */
   readonly onClosed?: () => void;
   /**
@@ -565,6 +581,15 @@ export async function resolveGradingSourceBlocks(
   };
 }
 
+/** No search ran (`[D-629]`): nothing retrieved, a concept prompt, no relation resolved. */
+const NO_SEARCH_LOOKUP: ResolvedGradingSourceBlocks = {
+  sourceBlocks: [],
+  sourceMaterial: undefined,
+  relationExpected: false,
+  neighbourConceptId: undefined,
+  relationNames: undefined,
+};
+
 interface ResolvedPrompt {
   /** The question as she reads it (`./request.ts`'s prompt-context builders own its wording). */
   readonly question: string;
@@ -599,6 +624,10 @@ interface ResolvedPrompt {
   readonly courseCode: string | null;
   /** `[STY-9]`: the seeding instrument's own `noteTitle`, carried alongside `courseCode`, same posture. */
   readonly noteTitle: string | null;
+  /** `completed`: a passage search ran (it may have found nothing). `not-run`: none could run (`[D-629]`). */
+  readonly search: 'completed' | 'not-run';
+  /** Where the history link leads: the instrument's registry entry, or a matched topic's concept. */
+  readonly historyTarget: { readonly instrumentId?: string; readonly conceptKey?: string };
 }
 
 /** D7.1's `promptShape` for a prompt. */
@@ -630,14 +659,6 @@ type ModalState =
       readonly answer: string;
       readonly attemptId: string;
       readonly durationMs: number | null;
-    }
-  | {
-      /**
-       * A free-form topic whose lookup found nothing to explain against (an empty reference): the
-       * insufficient-notes refusal, before any answer, exactly as before `[D-603]`.
-       */
-      readonly phase: 'refused';
-      readonly prompt: ResolvedPrompt;
     }
   | {
       /**
@@ -719,21 +740,35 @@ export class ExplainBackModal extends Modal {
     // submitted". Fire-and-forget: `onClose` is synchronous, and
     // `recordNonAttemptIfPossible` never throws.
     if (this.state.phase === 'answering') void this.recordNonAttemptIfPossible(this.state.prompt);
-    // `[D-460]`: she leaves the passages without "Done" or "Try again" and their marker never
-    // reached her log: one more write, so a later answer is not read as written before them.
-    if (this.state.phase === 'passages') this.writeUnwrittenFeedbackShown(this.state.attemptId);
+    // `[D-630]`: any exit after a submitted explanation saves it, once: Esc, the close control,
+    // the history link, and "Done" and "Try again" (which reach here through `close()`, or have
+    // saved already); the attempt id dedupes. Includes a close during the exposure-marker write.
+    // `[D-460]`: and if the marker never reached her log, one more write, so a later answer is not
+    // read as written before the passages.
+    if (this.state.phase === 'revealing' || this.state.phase === 'passages') {
+      const { prompt, answer, attemptId, durationMs } = this.state;
+      void this.recordPracticeExplanationIfPossible(prompt, answer, attemptId, durationMs);
+      this.writeUnwrittenFeedbackShown(attemptId);
+    }
     this.closed = true;
     this.contentEl.empty();
     this.deps.onClosed?.();
   }
 
   private async resolveInstrumentPrompt(instrument: ReviewInstrument): Promise<void> {
-    const query = questionQuery(instrument);
-    const sourceBlocks = await this.deps.retrieveSourceBlocks(query);
+    const search = this.searchState();
     const subjectConceptId = instrument.conceptIds[0] ?? null;
     // F5.2a's lookup, done once, here: the passages she is shown after answering are these, never
-    // a fresh search. A resolved causes partner makes this a relation prompt.
-    const lookup = await resolveGradingSourceBlocks(this.deps, subjectConceptId, sourceBlocks);
+    // a fresh search. A resolved causes partner makes this a relation prompt. With no search
+    // available none runs (`[D-629]`).
+    const lookup =
+      search === 'not-run'
+        ? NO_SEARCH_LOOKUP
+        : await resolveGradingSourceBlocks(
+            this.deps,
+            subjectConceptId,
+            await this.deps.retrieveSourceBlocks(questionQuery(instrument)),
+          );
     const prompt: ResolvedPrompt = {
       question: buildExplainBackPromptContextFromInstrument(instrument, lookup.sourceBlocks)
         .question,
@@ -748,6 +783,8 @@ export class ExplainBackModal extends Modal {
       // `[STY-9]`: real, already-available instrument fields — see `ResolvedPrompt.courseCode`.
       courseCode: instrument.courseCode,
       noteTitle: instrument.noteTitle,
+      search,
+      historyTarget: { instrumentId: instrument.instrumentId },
     };
     this.enterNewQuestion(prompt);
   }
@@ -755,10 +792,17 @@ export class ExplainBackModal extends Modal {
   private async resolveTopicPrompt(topic: string): Promise<void> {
     this.state = { phase: 'loading' };
     this.render();
-    const sourceBlocks = await this.deps.retrieveSourceBlocks(topic);
+    const search = this.searchState();
     // A topic she typed herself is looked up by the topic alone, as before `[D-603]`: the
     // lookup's `null` subject returns the retrieval unchanged, and the prompt is a concept prompt.
-    const lookup = await resolveGradingSourceBlocks(this.deps, null, sourceBlocks);
+    const lookup =
+      search === 'not-run'
+        ? NO_SEARCH_LOOKUP
+        : await resolveGradingSourceBlocks(
+            this.deps,
+            null,
+            await this.deps.retrieveSourceBlocks(topic),
+          );
     // `[D-322]` (`ol-egov.141.89.6.4`): resolve the freeform topic to one subject concept HERE, at
     // composition time, before she ever sees an answer box. Absent, or `undefined`, is no match.
     const topicMatch: FreeformTopicConceptMatch = this.deps.matchFreeformTopicConcept?.(topic) ?? {
@@ -767,25 +811,56 @@ export class ExplainBackModal extends Modal {
     const subjectConceptId = topicMatch.kind === 'unique' ? topicMatch.conceptId : null;
     const conceptIds = topicMatch.kind === 'unique' ? [topicMatch.conceptId] : [];
     const context = buildExplainBackPromptContextFromTopic(topic, lookup.sourceBlocks);
+    const originInstrumentId = this.deps.generateInstrumentId();
     const prompt: ResolvedPrompt = {
       question: context.question,
       subjectConceptId,
-      originInstrumentId: this.deps.generateInstrumentId(),
+      originInstrumentId,
       passages: lookup.sourceBlocks,
       shape: { kind: 'concept' },
       conceptIds,
       // `[STY-9]`: a freeform topic has no seeding instrument, so genuinely no course to report.
       courseCode: null,
       noteTitle: null,
+      search,
+      historyTarget:
+        subjectConceptId !== null
+          ? { conceptKey: subjectConceptId }
+          : { instrumentId: originInstrumentId },
     };
-    if (context.referenceAnswer.trim() === '') {
-      // Nothing to explain against: the insufficient-notes refusal, before any answer box, as
-      // before `[D-603]`. No prompt is presented, so nothing is timed.
-      this.state = { phase: 'refused', prompt };
-      this.render();
-      return;
-    }
+    // `[D-629]`: no refusal before she answers, whatever the search found; the view says what it
+    // found after her answer.
     this.enterNewQuestion(prompt);
+  }
+
+  private searchState(): 'completed' | 'not-run' {
+    return this.deps.searchAvailable?.() === false ? 'not-run' : 'completed';
+  }
+
+  /**
+   * The history link (sheet v87 row 6): closing saves her explanation (`onClose`, once), then the
+   * registry entry opens, so following it first saves and then navigates.
+   */
+  private async followHistory(prompt: ResolvedPrompt): Promise<void> {
+    const shown = this.state;
+    if (shown.phase === 'passages') {
+      await this.recordPracticeExplanationIfPossible(
+        shown.prompt,
+        shown.answer,
+        shown.attemptId,
+        shown.durationMs,
+      );
+    }
+    if (!this.closed) this.close();
+    const open =
+      this.deps.openHistory ??
+      (async (target: { instrumentId?: string; conceptKey?: string }) => {
+        const { openRegistryEntryFor } = await import('../registry/obsidian-ports.js');
+        await openRegistryEntryFor(this.app, target);
+      });
+    void Promise.resolve(open(prompt.historyTarget)).catch((error: unknown) => {
+      console.error('Olea: opening the explain-back history failed', { error });
+    });
   }
 
   /** A newly resolved question: a fresh clock, no earlier attempts in this view, an empty answer box. */
@@ -1015,9 +1090,6 @@ export class ExplainBackModal extends Modal {
           this.state.durationMs,
         );
         return;
-      case 'refused':
-        this.renderRefusedPhase(root, this.state.prompt);
-        return;
       case 'skipped':
         this.renderSkippedPhase(root);
         return;
@@ -1153,16 +1225,25 @@ export class ExplainBackModal extends Modal {
   ): void {
     this.renderQuestion(root, prompt);
     this.renderExplanation(root, answer);
-    root.createDiv({ cls: 'olea-explain-back-heading', text: EXPLAIN_BACK_PASSAGES_HEADING });
-    const list = root.createDiv({ cls: 'olea-explain-back-region-items' });
-    for (const passage of prompt.passages) {
-      const row = list.createDiv({ cls: 'olea-explain-back-item' });
-      row.createDiv({ cls: 'olea-explain-back-item-text', text: passage.block.text });
-      const label = passageSourceLabel(passage);
-      if (label !== null) row.createDiv({ cls: 'olea-explain-back-cite', text: label });
-    }
-    for (const reflection of explainBackReflectionPrompts(prompt.shape)) {
-      root.createEl('p', { text: reflection });
+    if (prompt.passages.length === 0) {
+      // `[D-629]`: in place of the heading, the empty list and the reflection prompts (which point
+      // at passages that are not there). A search that could not run says it is unavailable.
+      root.createEl('p', {
+        text:
+          prompt.search === 'not-run' ? EXPLAIN_WHY_UNAVAILABLE : EXPLAIN_BACK_NO_PASSAGES_FOUND,
+      });
+    } else {
+      root.createDiv({ cls: 'olea-explain-back-heading', text: EXPLAIN_BACK_PASSAGES_HEADING });
+      const list = root.createDiv({ cls: 'olea-explain-back-region-items' });
+      for (const passage of prompt.passages) {
+        const row = list.createDiv({ cls: 'olea-explain-back-item' });
+        row.createDiv({ cls: 'olea-explain-back-item-text', text: passage.block.text });
+        const label = passageSourceLabel(passage);
+        if (label !== null) row.createDiv({ cls: 'olea-explain-back-cite', text: label });
+      }
+      for (const reflection of explainBackReflectionPrompts(prompt.shape)) {
+        root.createEl('p', { text: reflection });
+      }
     }
     const actions = root.createDiv({ cls: 'olea-explain-back-actions' });
     const done = actions.createEl('button', { text: EXPLAIN_BACK_DONE_LABEL });
@@ -1171,50 +1252,11 @@ export class ExplainBackModal extends Modal {
     );
     const tryAgain = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
     tryAgain.addEventListener('click', () => this.tryAgain(prompt, answer, attemptId, durationMs));
-  }
-
-  /**
-   * [STY-0h] (`ol-l5og.18.8`): the insufficient-notes refusal for a free-form
-   * topic whose lookup found nothing to explain against — dashed edge and,
-   * whenever retrieval returned anything at all, the found-list itself
-   * (C4.7's permitted content). Reached before any answer, as before
-   * `[D-603]`.
-   */
-  private renderRefusedPhase(root: HTMLElement, prompt: ResolvedPrompt): void {
-    this.renderQuestion(root, prompt);
-    const box = root.createDiv({
-      cls: 'olea-explain-back-refusal-box olea-explain-back-refusal-box--absent',
+    const history = actions.createEl('button', {
+      cls: 'olea-explain-back-registry-action',
+      text: EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
     });
-    const eyebrow = box.createDiv({ cls: 'olea-explain-back-refusal-eyebrow' });
-    eyebrow.createSpan({ cls: 'olea-explain-back-refusal-eyebrow-mark--dashed' });
-    eyebrow.createSpan({
-      cls: 'olea-explain-back-refusal-eyebrow-text',
-      text: EXPLAIN_BACK_NOTHING_MATCHED_EYEBROW,
-    });
-    box.createEl('p', {
-      cls: 'olea-explain-back-refusal',
-      text: explainBackInsufficientNotesRefusal(prompt.passages.length),
-    });
-    if (prompt.passages.length > 0) this.renderFoundList(box, prompt.passages);
-  }
-
-  /**
-   * The found-list `renderRefusedPhase` shows when retrieval returned at least
-   * one block — read-only (the note path and the passage text itself, never a
-   * summary of it).
-   */
-  private renderFoundList(parent: HTMLElement, blocks: readonly ExplainBackSourceBlock[]): void {
-    const wrap = parent.createDiv({ cls: 'olea-explain-back-found-list' });
-    wrap.createDiv({
-      cls: 'olea-explain-back-found-list-caption',
-      text: EXPLAIN_BACK_FOUND_LIST_CAPTION,
-    });
-    const rows = wrap.createDiv({ cls: 'olea-explain-back-found-list-rows' });
-    for (const block of blocks) {
-      const row = rows.createDiv({ cls: 'olea-explain-back-found-list-row' });
-      row.createSpan({ cls: 'olea-explain-back-found-list-path', text: block.path });
-      row.createSpan({ cls: 'olea-explain-back-found-list-text', text: block.block.text });
-    }
+    history.addEventListener('click', () => void this.followHistory(prompt));
   }
 
   /**

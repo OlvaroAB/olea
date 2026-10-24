@@ -69,7 +69,7 @@ describe('ExplainBackModal — no restatement gate exists (D-279 supersedes D-08
     expect(body).not.toMatch(/overlap/i);
   });
 
-  it('ModalState has no restatement-intercept-shaped phase — every phase is one of the seven v0.9 states', () => {
+  it('ModalState has no restatement-intercept-shaped phase — every phase is one of the six v0.9 states', () => {
     const start = modal.indexOf('type ModalState =');
     const end = modal.indexOf('export class ExplainBackModal');
     expect(start).toBeGreaterThan(-1);
@@ -77,7 +77,7 @@ describe('ExplainBackModal — no restatement gate exists (D-279 supersedes D-08
     const body = modal.slice(start, end);
     const phases = [...body.matchAll(/phase:\s*'([a-z]+)'/g)].map((m) => m[1]);
     expect(new Set(phases)).toEqual(
-      new Set(['topic', 'loading', 'answering', 'revealing', 'passages', 'refused', 'skipped']),
+      new Set(['topic', 'loading', 'answering', 'revealing', 'passages', 'skipped']),
     );
     expect(body).not.toMatch(/restat/i);
     expect(body).not.toMatch(/overlap/i);
@@ -101,7 +101,7 @@ describe('ExplainBackModal — no restatement gate exists (D-279 supersedes D-08
     // renderPassagesPhase is the one phase after an answer in v0.9. Neither D-089 s.6 nor F5.3
     // names when the optional copy should show, so it stays off (the safe direction).
     const start = modal.indexOf('private renderPassagesPhase(');
-    const end = modal.indexOf('private renderRefusedPhase(');
+    const end = modal.indexOf('private renderSkippedPhase(');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     expect(modal.slice(start, end)).not.toMatch(/own words/i);

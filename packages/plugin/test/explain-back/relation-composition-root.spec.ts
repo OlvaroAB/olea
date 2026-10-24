@@ -171,9 +171,7 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = modal.slice(start, end);
-    expect(body).toMatch(
-      /const lookup = await resolveGradingSourceBlocks\(this\.deps, subjectConceptId, sourceBlocks\);/,
-    );
+    expect(body).toMatch(/await resolveGradingSourceBlocks\(\s*this\.deps,\s*subjectConceptId,/);
     // The question text still comes from the one builder that owns it; nothing else of the
     // request it builds is kept (no digest, no permitted ids: nothing is sent).
     expect(body).toMatch(
@@ -182,7 +180,7 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     expect(body).not.toMatch(/permittedConceptIdsFor|misconceptionDigest/);
     // Matched field by field, so an unrelated field slipping in still fails here.
     expect(body).toMatch(
-      /const prompt: ResolvedPrompt = \{\s*question: [\s\S]*?\.question,\s*subjectConceptId,\s*originInstrumentId: instrument\.instrumentId,\s*passages: lookup\.sourceBlocks,\s*shape:[\s\S]*?\{ kind: 'concept' \},\s*conceptIds: instrument\.conceptIds,\s*courseCode: instrument\.courseCode,\s*noteTitle: instrument\.noteTitle,\s*\};/,
+      /const prompt: ResolvedPrompt = \{\s*question: [\s\S]*?\.question,\s*subjectConceptId,\s*originInstrumentId: instrument\.instrumentId,\s*passages: lookup\.sourceBlocks,\s*shape:[\s\S]*?\{ kind: 'concept' \},\s*conceptIds: instrument\.conceptIds,\s*courseCode: instrument\.courseCode,\s*noteTitle: instrument\.noteTitle,\s*search,\s*historyTarget: \{ instrumentId: instrument\.instrumentId \},\s*\};/,
     );
   });
 
@@ -192,9 +190,7 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = modal.slice(start, end);
-    expect(body).toMatch(
-      /const lookup = await resolveGradingSourceBlocks\(this\.deps, null, sourceBlocks\);/,
-    );
+    expect(body).toMatch(/await resolveGradingSourceBlocks\(\s*this\.deps,\s*null,/);
     expect(body).toMatch(/buildExplainBackPromptContextFromTopic\(topic, lookup\.sourceBlocks\);/);
   });
 });

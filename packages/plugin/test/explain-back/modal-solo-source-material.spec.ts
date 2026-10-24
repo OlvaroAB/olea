@@ -91,16 +91,14 @@ describe('v0.9: ResolvedPrompt carries the passages and the prompt’s shape fro
     const start = modal.indexOf('private async resolveInstrumentPrompt(');
     const end = modal.indexOf('private async resolveTopicPrompt(');
     const body = modal.slice(start, end);
-    expect(body).toMatch(
-      /const lookup = await resolveGradingSourceBlocks\(this\.deps, subjectConceptId, sourceBlocks\);/,
-    );
+    expect(body).toMatch(/await resolveGradingSourceBlocks\(\s*this\.deps,\s*subjectConceptId,/);
     expect(body).toMatch(/passages: lookup\.sourceBlocks,/);
     expect(body).toMatch(
       /lookup\.relationExpected && lookup\.relationNames !== undefined\s*\?\s*\{ kind: 'relation', \.\.\.lookup\.relationNames \}\s*:\s*\{ kind: 'concept' \}/,
     );
   });
 
-  it('resolveTopicPrompt’s one prompt (refused or answered) is a concept prompt over the lookup’s blocks', () => {
+  it('resolveTopicPrompt’s one prompt (it is never refused, [D-629]) is a concept prompt over the lookup’s blocks', () => {
     const start = modal.indexOf('private async resolveTopicPrompt(');
     const end = modal.indexOf('private enterNewQuestion(');
     const body = modal.slice(start, end);
