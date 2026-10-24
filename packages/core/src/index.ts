@@ -1183,6 +1183,7 @@ export {
 // in the plugin repo) is not yet wired — see that module's own doc for the exact insertion point.
 export type {
   CitationFreshnessState,
+  CitationInputNote,
   CitationRecord,
   InstrumentCitation,
 } from './instrument/citation-store.js';
@@ -1191,8 +1192,10 @@ export {
   CITATION_STORE_FOLDER,
   citationStorePath,
   classifyCitationFreshness,
+  isCitationInputNoteList,
   isCitationRecord,
   readInstrumentCitation,
+  readInstrumentCitationRecord,
   renameCitationSourcePath,
   writeInstrumentCitation,
 } from './instrument/citation-store.js';
@@ -1396,7 +1399,11 @@ export type {
   BuildProgress,
   BuildResult,
 } from './keyword-index/build.js';
-export { buildFullIndex, DEFAULT_INDEX_CHUNK_SIZE } from './keyword-index/build.js';
+export {
+  buildFullIndex,
+  DEFAULT_INDEX_CHUNK_SIZE,
+  indexedBinaryFormatOf,
+} from './keyword-index/build.js';
 export { indexDocument } from './keyword-index/document.js';
 export type {
   BinarySourcesDeps,

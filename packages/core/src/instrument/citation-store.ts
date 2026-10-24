@@ -69,6 +69,21 @@
  * records, through {@link renameCitationSourcePath} and nowhere else: path only, every other field
  * kept exactly as written, and refused unless the record still names the path being renamed from.
  * The path stays write-once for every other cause, and no record-shape change comes with it.
+ * `[D-626]`/`[D-628]` extend that one exception to the record's input-note paths (below) and to
+ * nothing else: a rename Olea saw of a note the item was drafted from moves that note's path in
+ * `inputNotes`, its fingerprint kept as written.
+ *
+ * ===========================================================================
+ * THE INPUT NOTES (`[D-626]`, `[D-628]`; SCHEMA VERSION 3)
+ * ===========================================================================
+ * A drafted item records every note its drafting request was drawn from, each with a fingerprint
+ * of the material actually supplied (functional scope C5.3, "A drafted item records every note its
+ * drafting request was drawn from, and each of them protects it"). The draft record carries the
+ * list while the item is pending (`packages/plugin/src/generation/types.ts`, `DraftRecord.inputNotes`)
+ * and this record carries it once she keeps the item. Optional and additive: a version 2 record
+ * still reads, with no input notes, and a record whose item was never drafted through a draft
+ * record (a practice paper's item) is written at version 3 with none. This module never computes
+ * a fingerprint (no vault reads beyond its own file); the plugin's drafting path does.
  */
 
 import type { VaultPath, VaultSource } from '../vault/types.js';
@@ -77,7 +92,9 @@ import type { VaultPath, VaultSource } from '../vault/types.js';
 export const CITATION_STORE_FOLDER: VaultPath = '.olea/citations';
 
 /**
- * Bumped only on a breaking change to the record shape. `2` since `[D-292]`
+ * Bumped on a change to the record shape. `3` since `[D-628]` (`ol-egov.141.89.2.41`, closed): a
+ * record may carry `inputNotes` (optional, additive; a `2`-vintage record never had it and reads
+ * unchanged). `2` since `[D-292]`
  * (`ol-egov.141.89.2.7`, closed): a record written from here on carries
  * `passageDigest`/`sourceRevision` (still each independently optional — see
  * those fields' own doc); a `1`-vintage record on disk never had them and is
@@ -87,7 +104,7 @@ export const CITATION_STORE_FOLDER: VaultPath = '.olea/citations';
  * bump records, so a corrupt or hand-edited `schemaVersion` on an old file
  * can never desync the two.
  */
-export const CITATION_RECORD_SCHEMA_VERSION = 2;
+export const CITATION_RECORD_SCHEMA_VERSION = 3;
 
 /**
  * A generated instrument's passage citation, at `[D-181]`'s grain — `sourcePath` plus optional
@@ -146,14 +163,47 @@ export interface InstrumentCitation {
   readonly sourceRevision?: string;
 }
 
+/**
+ * `[D-628]`: one note a drafted item's request was drawn from — its path and the fingerprint of the
+ * material supplied from it when the item was drafted. The fingerprint is opaque here: the plugin's
+ * drafting path takes it (`packages/plugin/src/generation/input-notes.ts`) and its presentation
+ * check and batch pass compare it, so this module only stores and validates it.
+ */
+export interface CitationInputNote {
+  readonly path: VaultPath;
+  readonly contentHash: string;
+}
+
 /** One citation record under `.olea/citations/` — `InstrumentCitation` plus its key and schema version. */
 export interface CitationRecord extends InstrumentCitation {
   readonly instrumentId: string;
   readonly schemaVersion: number;
+  /**
+   * `[D-628]` (schema version 3): every note the item's drafting request was drawn from, one entry
+   * per distinct note, carried from the draft when she kept it. Absent on every record written
+   * before version 3 and on a record whose item was not drafted through a draft record (a practice
+   * paper's item, `packages/plugin/src/paper/provider.ts`). Never present and empty.
+   */
+  readonly inputNotes?: readonly CitationInputNote[];
 }
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+/**
+ * `[D-628]`: a well-formed input-note list — a non-empty array of entries, each a plain object with a
+ * non-empty `path` and a non-empty `contentHash`. Shared by this module's own record guard and the
+ * plugin's draft-record guard, so the two stores accept and reject exactly the same lists. A list
+ * that is absent is the caller's to allow; this function only judges one that is present.
+ */
+export function isCitationInputNoteList(value: unknown): value is readonly CitationInputNote[] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  return value.every((entry) => {
+    if (typeof entry !== 'object' || entry === null) return false;
+    const e = entry as Record<string, unknown>;
+    return isNonEmptyString(e.path) && isNonEmptyString(e.contentHash);
+  });
 }
 
 /** Runtime validation, matching `key-store.ts`/`content-store.ts`'s hand-rolled-guard style (no schema library in this package). */
@@ -168,6 +218,9 @@ export function isCitationRecord(value: unknown): value is CitationRecord {
   // `page`/`section` already get — a `1`-vintage record simply lacks them.
   if (v.passageDigest !== undefined && !isNonEmptyString(v.passageDigest)) return false;
   if (v.sourceRevision !== undefined && !isNonEmptyString(v.sourceRevision)) return false;
+  // `[D-628]`: absent is fine (every version 2 record, and a version 3 record with no draft behind
+  // it); present, it must be a well-formed list.
+  if (v.inputNotes !== undefined && !isCitationInputNoteList(v.inputNotes)) return false;
   if (typeof v.schemaVersion !== 'number') return false;
   return true;
 }
@@ -232,11 +285,16 @@ export function classifyCitationFreshness(
  * Writes one instrument's citation, write-once — see the module doc's "write-once, like the
  * content store" section. Throws, before touching the vault a second time, if a record already
  * exists under `instrumentId`; the file that already exists is left untouched.
+ *
+ * `inputNotes` (`[D-628]`): the drafted item's input notes, written exactly as given; omitted (or
+ * empty) writes none. Throws, before writing, on a malformed list, so a record this store writes
+ * always reads back.
  */
 export async function writeInstrumentCitation(
   vault: VaultSource,
   instrumentId: string,
   citation: InstrumentCitation,
+  inputNotes?: readonly CitationInputNote[],
 ): Promise<void> {
   const path = citationStorePath(instrumentId);
   if (await vault.exists(path)) {
@@ -244,10 +302,19 @@ export async function writeInstrumentCitation(
       `writeInstrumentCitation: instrument id ${JSON.stringify(instrumentId)} already has a citation record — refusing to overwrite an immutable record`,
     );
   }
+  const notes = inputNotes === undefined || inputNotes.length === 0 ? undefined : inputNotes;
+  if (notes !== undefined && !isCitationInputNoteList(notes)) {
+    throw new Error(
+      `writeInstrumentCitation: malformed input notes for instrument id ${JSON.stringify(instrumentId)}`,
+    );
+  }
   const record: CitationRecord = {
     ...citation,
     instrumentId,
     schemaVersion: CITATION_RECORD_SCHEMA_VERSION,
+    ...(notes === undefined
+      ? {}
+      : { inputNotes: notes.map((note) => ({ path: note.path, contentHash: note.contentHash })) }),
   };
   await vault.write(path, serialize(record));
 }
@@ -261,6 +328,10 @@ export async function writeInstrumentCitation(
  * with the vault untouched when there is no readable record for this instrument, it does not name
  * `fromPath`, or `fromPath` equals `toPath` — the guard that keeps the path write-once for any cause
  * but a rename of the very source the record cites. Never throws on a missing or corrupt file.
+ *
+ * `[D-626]`/`[D-628]`: the same rename moves every `inputNotes` entry whose path is `fromPath`, its
+ * fingerprint kept as written. The record counts as naming `fromPath` when its `sourcePath` or any
+ * input note does; each that does moves, and nothing else changes.
  */
 export async function renameCitationSourcePath(
   vault: VaultSource,
@@ -277,14 +348,24 @@ export async function renameCitationSourcePath(
   } catch {
     return false;
   }
-  if (
-    !isCitationRecord(parsed) ||
-    parsed.instrumentId !== instrumentId ||
-    parsed.sourcePath !== fromPath
-  ) {
-    return false;
-  }
-  await vault.write(path, serialize({ ...parsed, sourcePath: toPath }));
+  if (!isCitationRecord(parsed) || parsed.instrumentId !== instrumentId) return false;
+  const sourceMoves = parsed.sourcePath === fromPath;
+  const notesMove = parsed.inputNotes?.some((note) => note.path === fromPath) === true;
+  if (!sourceMoves && !notesMove) return false;
+  await vault.write(
+    path,
+    serialize({
+      ...parsed,
+      ...(sourceMoves ? { sourcePath: toPath } : {}),
+      ...(notesMove && parsed.inputNotes !== undefined
+        ? {
+            inputNotes: parsed.inputNotes.map((note) =>
+              note.path === fromPath ? { ...note, path: toPath } : note,
+            ),
+          }
+        : {}),
+    }),
+  );
   return true;
 }
 
@@ -311,6 +392,27 @@ export async function readInstrumentCitation(
       return toCitation(parsed);
     }
     return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `[D-628]`: one instrument's whole citation record, input notes and schema version included — the
+ * read the presentation check and the batch pass make to protect an item by every note it was
+ * drafted from. Same never-throws posture as {@link readInstrumentCitation}: an absent, unreadable,
+ * malformed or mismatched file is `undefined`.
+ */
+export async function readInstrumentCitationRecord(
+  vault: VaultSource,
+  instrumentId: string,
+): Promise<CitationRecord | undefined> {
+  if (instrumentId.length === 0) return undefined;
+  const path = citationStorePath(instrumentId);
+  try {
+    if (!(await vault.exists(path))) return undefined;
+    const parsed: unknown = JSON.parse(await vault.read(path));
+    return isCitationRecord(parsed) && parsed.instrumentId === instrumentId ? parsed : undefined;
   } catch {
     return undefined;
   }
