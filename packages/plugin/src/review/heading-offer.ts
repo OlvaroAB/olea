@@ -115,8 +115,8 @@ import {
   type VaultPath,
 } from 'olea-core';
 import type { DraftCacheStore } from '../generation/cache-store.js';
-import { deriveDraftId } from '../generation/cache-store.js';
-import { citationOfInputNote } from '../generation/input-notes.js';
+import { deriveDraftId, unusedDraftId } from '../generation/cache-store.js';
+import { citationOfInputNote, internalCitationNote } from '../generation/input-notes.js';
 import {
   demandRoutingCounterFor,
   draftDemandForQuestion,
@@ -337,15 +337,18 @@ export function createHeadingOfferPort(deps: HeadingOfferPortDeps): HeadingOffer
 
       // `[D-437]`: what the request carried and the response returned about demand, split per question.
       const demandCarry = draftedDemandCarryOf(result.request, result.response);
-      // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): every note the request was drawn from; a draft
-      // drawn from one note cites that note (this path cited nothing before). Several: no citation,
-      // and the origin a surface shows is read from the list.
+      // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): every note the request was drawn from, and the
+      // note the draft cites (this path cited nothing before). One note: that note. Several (findings
+      // C, J): one of them, as the sweep chooses (`internalCitationNote`: the note she is reading
+      // when it supplied a chunk, else the one that supplied the most), built as that note is cited,
+      // so the kept item carries a page and the citation pass tracks it; internal only, since the
+      // origin a surface shows is read from the list.
       const inputNotes = result.inputNotes;
-      const onlyNote = inputNotes?.length === 1 ? inputNotes[0] : undefined;
+      const citedNote = internalCitationNote(inputNotes, result.chunkPaths, context.sourcePath);
       const sourceCitation =
-        onlyNote === undefined || draftDeps.vault === undefined
+        citedNote === undefined || draftDeps.vault === undefined
           ? undefined
-          : await citationOfInputNote(draftDeps.vault, onlyNote, context.sourcePath, result);
+          : await citationOfInputNote(draftDeps.vault, citedNote, context.sourcePath, result);
 
       const createdAt = now().toISOString();
       const draftIds: string[] = [];
@@ -358,7 +361,17 @@ export function createHeadingOfferPort(deps: HeadingOfferPortDeps): HeadingOffer
           draftDemandRefusalCounterFor(deps.cache).record(context.concept.key);
           continue;
         }
-        const draftId = await deriveDraftId(context.courseCode, context.concept.name, sequence);
+        // `ol-egov.141.89.2.39` (finding H; D-381, INV-2): this id space is the sweep's own first
+        // drafts', so the id is checked and stepped past any record already there (a sweep draft,
+        // pending or kept, or an earlier offer's), never `put()` over it.
+        const draftId = await unusedDraftId(
+          deps.cache,
+          await deriveDraftId(context.courseCode, context.concept.name, sequence),
+          context.courseCode,
+          context.concept.name,
+          sequence,
+          `heading-offer:${createdAt}`,
+        );
         const record: DraftRecord = {
           draftId,
           status: 'pending',

@@ -22,7 +22,7 @@ import {
 } from '../../src/generation/pipeline.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
-import { SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
+import { SYNTHETIC_INPUT_FILES, SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
 
 const NOTE = '01 Courses/COGS214/Week 2.md';
 const NOTE_TEXT = '# Week 2\n\nher prose\n';
@@ -95,7 +95,7 @@ function setup(options: {
   readonly cardOutcome?: (name: string) => DraftCardsResult;
   readonly formatMatch?: FormatMatchDecision;
 }) {
-  const vault = new MemoryVaultSource({ [NOTE]: NOTE_TEXT });
+  const vault = new MemoryVaultSource({ ...SYNTHETIC_INPUT_FILES, [NOTE]: NOTE_TEXT });
   const cache = createVaultDraftCacheStore(vault);
   const quizAsks: Record<string, unknown>[] = [];
   const cardAsks: Record<string, unknown>[] = [];

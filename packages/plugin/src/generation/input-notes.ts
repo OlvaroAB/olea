@@ -15,10 +15,13 @@
  * ===========================================================================
  * For a markdown note (a declared-Markdown lecture transcript included), the fingerprint is the hash
  * of exactly what the whole-note materiality check compares: the whole note, its frontmatter
- * included, minus the question blocks (`stripQuestionBlocks`, the citation pass's own strip), in the
- * existing canonical form (`computeMaterialityHashes`'s `canonicalHash`, over
- * `canonicalizeForMateriality`). So a formatting-only edit, or a question block added, leaves it
- * equal — the code's free exits — and any other content change does not. For any other source (a
+ * included, minus the question blocks (`stripQuestionBlocks`, the citation pass's own strip) and
+ * minus the frontmatter writes Olea makes itself (`stripOleaFrontmatterWrites`: its `olea-*` stamps,
+ * and a home note's `topic:` list; her own frontmatter stays in), in the existing canonical form
+ * (`computeMaterialityHashes`'s `canonicalHash`, over `canonicalizeForMateriality`). So a
+ * formatting-only edit, a question block added, or a stamp Olea writes leaves it equal — the code's
+ * free exits, and Olea's own writes, which are not a change to her material — and any other content
+ * change does not. For any other source (a
  * PDF, deck or document, a plain-text transcript), it is the hash of the file's raw bytes, the
  * revision `review/open-session.ts`'s `nonMarkdownSourceUnchanged` compares.
  *
@@ -36,6 +39,7 @@
  * drafting request still carries chunk text only.
  */
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import type {
   CitationInputNote,
   CitationRecord,
@@ -56,6 +60,8 @@ import { computeMaterialityHashes } from '../ingestion/materiality/hashes.js';
 import { hasTranscriptExtension } from '../ingestion/materiality/transcript-grain.js';
 import type { SuppliedChunkLocation } from '../retrieval/draft-quiz-cards.js';
 import { withGroundingPassage } from './grounding-passage.js';
+import { stripOleaFrontmatterWrites } from './strip-olea-frontmatter.js';
+import type { DraftRecord } from './types.js';
 
 /** One input note: the note's path and the fingerprint of the material supplied from it. */
 export type InputNote = CitationInputNote;
@@ -64,9 +70,19 @@ function isMarkdownPath(path: string): boolean {
   return path.toLowerCase().endsWith('.md');
 }
 
+/**
+ * The material a whole-note comparison reads from one markdown note's raw text: the note minus its
+ * question blocks and minus the frontmatter writes Olea makes itself — see the module doc. The
+ * cited note's whole-note check (`review/open-session.ts`, the citation pass) leaves out the same
+ * writes with the same strip (`stripOleaFrontmatterWrites`), so the two comparisons cannot drift.
+ */
+function wholeNoteMaterial(raw: string): string {
+  return stripQuestionBlocks(stripOleaFrontmatterWrites(raw));
+}
+
 /** The markdown fingerprint of one note's raw text — see the module doc. */
 export async function markdownFingerprint(raw: string): Promise<string> {
-  return (await computeMaterialityHashes(stripQuestionBlocks(raw))).canonicalHash;
+  return (await computeMaterialityHashes(wholeNoteMaterial(raw))).canonicalHash;
 }
 
 /**
@@ -192,6 +208,16 @@ export function singlePassageNote(
 }
 
 /**
+ * `ol-egov.141.89.2.39` (finding F): where a note stands now, given a rename Olea saw that its
+ * records have not caught up with yet (`CitationRevisionTrigger.renamedPathOf`). Identity when no
+ * rename is in flight for `path`. A rename alone never changes a fingerprint, so a check that reads
+ * a note through this reads the renamed note, never a missing one.
+ */
+export type PathNow = (path: VaultPath) => VaultPath;
+
+const samePath: PathNow = (path) => path;
+
+/**
  * Whether every input note still reads as it did when the item was drafted: each read afresh and
  * compared by fingerprint; a missing or unreadable note is a change. `skipPath` is a note checked at
  * its own passage grain elsewhere ({@link singlePassageNote}). Never throws.
@@ -200,10 +226,11 @@ export async function inputNotesUnchanged(
   vault: VaultSource,
   inputNotes: readonly InputNote[],
   skipPath?: VaultPath,
+  pathNow: PathNow = samePath,
 ): Promise<boolean> {
   for (const note of inputNotes) {
     if (note.path === skipPath) continue;
-    if ((await inputNoteFingerprint(vault, note.path)) !== note.contentHash) return false;
+    if ((await inputNoteFingerprint(vault, pathNow(note.path))) !== note.contentHash) return false;
   }
   return true;
 }
@@ -230,41 +257,147 @@ export async function changedInputNotes(
 }
 
 /**
- * A pending draft's protection at presentation and at accept (`[D-626]`, `[D-628]`): `true` when
- * every input note reads as it did when drafted. The single-passage case keeps passage grain for its
- * note: its digest must still name exactly one passage of the note as it stands. A draft with no
- * input notes is not established and reads `false` (the caller decides what that means for a
- * draft recorded before input notes were). Never throws.
+ * The single-passage note's own check for an item with no passage anchor to read it by (a pending
+ * draft, and a kept item before the citation pass first anchors it): `true` when the note still
+ * reads as drafted, or, failing that, when its digest still names exactly one passage of it. The
+ * note's fingerprint is read first, so a formatting-only edit anywhere in it, the passage included
+ * (the fingerprint's canonical form leaves it equal), never reaches the digest lookup, and a change
+ * elsewhere in the note keeps the item while its passage stands (passage grain). A lecture
+ * transcript's digest names a part, checked at its own grain by the transcript checks that read it,
+ * never by the note segmentation here. Never throws.
+ */
+async function singlePassageStands(
+  vault: VaultSource,
+  note: InputNote,
+  passageDigest: string,
+  pathNow: PathNow,
+): Promise<boolean> {
+  const path = pathNow(note.path);
+  try {
+    if ((await inputNoteFingerprint(vault, path)) === note.contentHash) return true;
+    if (!(await vault.exists(path))) return false;
+    const text = await vault.read(path);
+    const transcript =
+      hasTranscriptExtension(path) || resolveTranscriptFormat(path, text).kind === 'transcript';
+    if (transcript) return true;
+    const located = await locatePassageByDigest(stripQuestionBlocks(text), passageDigest);
+    return located.status === 'unique';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A pending draft's protection at presentation and at accept (`[D-626]`, `[D-628]`), and a kept
+ * item's before the citation pass has anchored it: `true` when every input note reads as it did when
+ * drafted. The single-passage case keeps passage grain for its note ({@link singlePassageStands}). A
+ * draft with no input notes is not established and reads `false` (the caller decides what that
+ * means for a draft recorded before input notes were). `pathNow` reads a note a rename in flight is
+ * moving at its new path. Never throws.
  */
 export async function draftInputNotesHold(
   vault: VaultSource,
   citation: InstrumentCitation | undefined,
   inputNotes: readonly InputNote[] | undefined,
+  pathNow: PathNow = samePath,
 ): Promise<boolean> {
   if (inputNotes === undefined || inputNotes.length === 0) return false;
   const passageNote = singlePassageNote(citation, inputNotes);
-  if (passageNote !== undefined && citation?.passageDigest !== undefined) {
-    try {
-      if (!(await vault.exists(passageNote))) return false;
-      const text = await vault.read(passageNote);
-      // A lecture transcript's digest names a part (its spoken text), not a note passage: the part
-      // is checked at its own grain by the transcript checks that read it (the citation's version
-      // for a pending draft, the part anchor once kept), never by the note segmentation here.
-      const transcript =
-        hasTranscriptExtension(passageNote) ||
-        resolveTranscriptFormat(passageNote, text).kind === 'transcript';
-      if (!transcript) {
-        const located = await locatePassageByDigest(
-          stripQuestionBlocks(text),
-          citation.passageDigest,
-        );
-        if (located.status !== 'unique') return false;
-      }
-    } catch {
-      return false;
+  const only = inputNotes[0];
+  if (passageNote !== undefined && citation?.passageDigest !== undefined && only !== undefined) {
+    if (!(await singlePassageStands(vault, only, citation.passageDigest, pathNow))) return false;
+  }
+  return inputNotesUnchanged(vault, inputNotes, passageNote, pathNow);
+}
+
+/**
+ * A kept item's protection by its input notes at presentation (`[D-626]`, `[D-628]`; functional
+ * scope C5.3), given its citation record's list.
+ *
+ * `followedByAnchor` is the set of notes the item's citation anchor already follows (its anchored
+ * note, its cited note and its cited source: `citation-revision-wiring.ts`'s
+ * `notesFollowedByAnchor`), supplied only when the anchor's own checks were read for this
+ * presentation. Those notes are judged by the anchor at their own grain and free exits — a
+ * single-passage note at passage grain, which a formatting-only edit or a move of the passage passes
+ * (`[D-446]`), a lecture transcript at its part or whole-transcript grain — and never a second time
+ * here; every other input note is compared by fingerprint. This is the same split the citation pass
+ * makes (`routeIfInputNotesChanged`), so an item the pass leaves standing is never withheld here for
+ * good. With no anchor read, every note is checked as a pending draft's are
+ * ({@link draftInputNotesHold}), as the pass compares every note at first sighting. Never throws.
+ */
+export async function keptInputNotesHold(
+  vault: VaultSource,
+  record: CitationRecord,
+  inputNotes: readonly InputNote[],
+  followedByAnchor: ReadonlySet<string> | undefined,
+  pathNow: PathNow = samePath,
+): Promise<boolean> {
+  if (followedByAnchor === undefined) {
+    return draftInputNotesHold(vault, record, inputNotes, pathNow);
+  }
+  const changed = await changedInputNotes(vault, inputNotes, followedByAnchor, (path) =>
+    inputNoteFingerprint(vault, pathNow(path)),
+  );
+  return changed.length === 0;
+}
+
+/**
+ * `ol-egov.141.89.2.39` (finding J; `[D-628]`'s citation rule): the input note a draft drawn from
+ * several notes cites internally — always one it was drawn from: the concept's note when that is
+ * one of them, otherwise the note that supplied the most chunks, ties broken by retrieval rank (the
+ * order `inputNotes` holds them in, each note's first chunk's place). A draft drawn from one note
+ * cites that note. `chunkPaths` is the request's chunk alignment (`DraftQuizCardsResult.chunkPaths`);
+ * without it the first note by retrieval rank. `undefined` for no input notes. The citation is
+ * internal: no surface shows it as the draft's sole source (the clearing list reads the list).
+ */
+export function internalCitationNote(
+  inputNotes: readonly InputNote[] | undefined,
+  chunkPaths: readonly string[] | undefined,
+  conceptNotePath: string | undefined,
+): InputNote | undefined {
+  if (inputNotes === undefined || inputNotes.length === 0) return undefined;
+  if (inputNotes.length === 1) return inputNotes[0];
+  const conceptNote = inputNotes.find((note) => note.path === conceptNotePath);
+  if (conceptNote !== undefined) return conceptNote;
+  let best: InputNote | undefined;
+  let bestCount = -1;
+  for (const note of inputNotes) {
+    const count = chunkPaths?.filter((path) => path === note.path).length ?? 0;
+    if (count > bestCount) {
+      best = note;
+      bestCount = count;
     }
   }
-  return inputNotesUnchanged(vault, inputNotes, passageNote);
+  return best;
+}
+
+/**
+ * `ol-egov.141.89.2.39` (finding E; `[D-628]`): the kept items Olea drafted through a draft record,
+ * from provenance that survives a purge of the draft cache (`[D-006]`, `purgeDraftCache`) and a lost
+ * index entry: every accept or edit of a draft appends a verdict to her review log naming the
+ * instrument it became and the call that drafted it (`accept.ts`; the contract requires
+ * `artifactProvenance` on an accept or an edit, `verdictLogRecordV6`), and nothing else writes one —
+ * a restore of her own rejected block carries `restores` and no provenance, a practice paper's item
+ * and her own blocks carry none. The draft cache's accepted and edited records are added (a verdict
+ * whose append failed after the cache flipped), never subtracted.
+ */
+export function draftedInstrumentIdsOf(
+  entries: readonly ReviewLogEntry[],
+  drafts: readonly DraftRecord[] = [],
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind !== 'verdict') continue;
+    if (entry.verdict !== 'accepted' && entry.verdict !== 'edited') continue;
+    if (entry.restores !== undefined || entry.artifactProvenance === undefined) continue;
+    ids.add(entry.instrumentId);
+  }
+  for (const record of drafts) {
+    if ((record.status === 'accepted' || record.status === 'edited') && record.instrumentId) {
+      ids.add(record.instrumentId);
+    }
+  }
+  return ids;
 }
 
 /**

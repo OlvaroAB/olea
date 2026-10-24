@@ -288,9 +288,21 @@
  * `input-note-rewrite`). There is no judge call: the anchor holds no old text for those notes, and
  * C5.3 rewrites a change past the free exits whatever the read answers. At first sighting every
  * input note is compared, the cited one included, so a change made between drafting and the first
- * pass is never adopted as the baseline. An item Olea drafted through a draft record before input
- * notes were recorded (its provenance read from the draft cache) is routed the same way, under rule
- * `input-notes-unrecorded`: no such record can show the material it rests on.
+ * pass is never adopted as the baseline — except the single-passage case's note, whose passage is
+ * seeded by its digest at passage grain. An item Olea drafted through a draft record before input
+ * notes were recorded is routed the same way, under rule `input-notes-unrecorded`: no such record
+ * can show the material it rests on. "Olea drafted it" is read from provenance that survives a purge
+ * of the draft cache: the accept or edit verdict in her review log, with the cache's accepted and
+ * edited records added (`input-notes.ts`'s `draftedInstrumentIdsOf`).
+ *
+ * `ol-egov.141.89.2.39` (review findings): a drafted item whose citation records no page (kept
+ * before every drafting path cited a note) is not tracked by the walk, yet is withheld for its input
+ * notes; it is still routed here, by the first-sighting rule, so it always reaches the rewrite. A
+ * frontmatter write Olea makes itself (a first-sight stamp, a home note's `topic:` growth or
+ * drafted-for record) is not a change to her material, here (rule `olea-frontmatter-writes`) as in
+ * the input-note fingerprint. The pass and a rename's moves run one at a time
+ * ({@link CitationRevisionTrigger.tick}, {@link CitationRevisionTrigger.onSourceRenamed}), and a
+ * pass reads a note a rename is still moving at its new path, so a rename alone is never routed.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -330,8 +342,15 @@ import {
   type VaultSource,
 } from 'olea-core';
 import { createVaultDraftCacheStore } from '../../generation/cache-store.js';
-import { changedInputNotes, inputNoteFingerprint } from '../../generation/input-notes.js';
+import {
+  changedInputNotes,
+  draftedInstrumentIdsOf,
+  inputNoteFingerprint,
+  singlePassageNote,
+} from '../../generation/input-notes.js';
 import type { CitedSourceNow } from '../../generation/revision-job-runner.js';
+import { stripOleaFrontmatterWrites } from '../../generation/strip-olea-frontmatter.js';
+import type { DraftRecord } from '../../generation/types.js';
 import { canonicalizeForMateriality } from './canonical.js';
 import type {
   CitationAnchorRecord,
@@ -640,6 +659,24 @@ export function citedPassagePath(record: VaultInstrumentRecord): VaultPath {
 }
 
 /**
+ * `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): the notes a citation anchor already follows for a
+ * drafted question — the note it last anchored (`anchorSourcePath`), its cited note
+ * ({@link citedPassagePath}) and its cited source. Each is judged by the anchor's own checks at its
+ * own grain and free exits (passage grain, a transcript's part or whole, a binary's bytes), so the
+ * input-note comparison leaves them out: here in the pass (`routeIfInputNotesChanged`) and at
+ * presentation (`review/open-session.ts`), one rule for both.
+ */
+export function notesFollowedByAnchor(
+  anchorSourcePath: VaultPath,
+  record: VaultInstrumentRecord,
+): ReadonlySet<string> {
+  const followed = new Set<string>([anchorSourcePath, citedPassagePath(record)]);
+  const cited = record.sourceProvenance?.sourcePath;
+  if (cited !== undefined) followed.add(cited);
+  return followed;
+}
+
+/**
  * `[D-366]`/`[D-398]` — whether an instrument is tracked under `[D-093]`'s
  * passage-change auto-suspension at all. See this module's own "`[D-366]`/
  * `[D-398]`" doc section above for the full ruling and its limits; this is
@@ -862,13 +899,58 @@ export class CitationRevisionTrigger {
   /** `ol-egov.141.89.5.84`: `sourcePath\n bytes hash` pairs this session already asked a re-extraction for. Memory only. */
   private readonly reextractionAsked = new Set<string>();
 
+  /**
+   * `ol-egov.141.89.2.39` (finding F; `[D-576]`, `[D-628]`): the renames Olea saw whose moves
+   * ({@link onSourceRenamed}) have not finished yet, oldest first. The vault already has the file at
+   * its new path while its records still name the old one, so a pass running meanwhile, and the
+   * session's presentation check (`renamedPathOf`, wired by `main.ts`), read a recorded path through
+   * this list: a rename alone never reads as a note gone. Memory only; each entry leaves the list
+   * once its moves are written.
+   */
+  private readonly renamesInFlight: { readonly from: VaultPath; readonly to: VaultPath }[] = [];
+
+  /**
+   * `ol-egov.141.89.2.39` (finding F): the tail of the one queue the batch pass ({@link tick}) and a
+   * rename's moves ({@link onSourceRenamed}) run on, one at a time, so a pass never reads records a
+   * rename is half-way through moving and the two never write the same anchor at once.
+   */
+  private exclusive: Promise<unknown> = Promise.resolve();
+
   constructor(private readonly deps: CitationRevisionTriggerDeps) {}
+
+  /** Runs `task` after every pass and rename move queued before it — see {@link exclusive}. */
+  private serialised<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.exclusive.then(task, task);
+    this.exclusive = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * `ol-egov.141.89.2.39` (finding F): where `path` stands now, following every rename Olea saw
+   * whose moves are still being written ({@link renamesInFlight}); `path` itself when none is.
+   * Read by the pass for an input note's fingerprint and by the session's presentation check, so a
+   * note a rename is moving is read at its new path. A rename alone never changes a fingerprint.
+   */
+  renamedPathOf(path: VaultPath): VaultPath {
+    let current = path;
+    for (let hop = 0; hop < this.renamesInFlight.length; hop += 1) {
+      const next = this.renamesInFlight.find((rename) => rename.from === current);
+      if (next === undefined) break;
+      current = next.to;
+    }
+    return current;
+  }
 
   /**
    * One whole-vault batch pass — see this module's own doc for why per-tick,
-   * not per-modify-event.
+   * not per-modify-event. `ol-egov.141.89.2.39` (finding F): queued behind any rename's moves
+   * still being written, and they behind it ({@link serialised}).
    */
-  async tick(
+  tick(vault: VaultSource, actions: CitationRevisionActions): Promise<CitationRevisionTickReport> {
+    return this.serialised(() => this.runTick(vault, actions));
+  }
+
+  private async runTick(
     vault: VaultSource,
     actions: CitationRevisionActions,
   ): Promise<CitationRevisionTickReport> {
@@ -986,8 +1068,11 @@ export class CitationRevisionTrigger {
     let rejectedInstrumentIds: ReadonlySet<string>;
     let suspendedIds: ReadonlySet<string> = new Set();
     let suspensionKnown = false;
+    // `ol-egov.141.89.2.39` (finding E): the log, kept for the drafted-item provenance below.
+    let reviewEntries: readonly ReviewLogEntry[] = [];
     try {
       const { entries } = await readReviewLogHistory(vault);
+      reviewEntries = entries;
       // `ol-egov.141.89.5.81` ([D-518]): a SUSPENDED instrument (her own, or this trigger's rewrite of
       // it) is left alone by the pass, read from the same log by the shared fold the presentation
       // path uses, so an `unsuspend` lifts it here too.
@@ -1009,29 +1094,26 @@ export class CitationRevisionTrigger {
     }
 
     // `[D-628]` (`ol-egov.141.89.2.39`): the kept items Olea drafted through a draft record, by
-    // provenance (an accepted or edited record names the instrument it became). A cache that cannot
-    // be read leaves this empty: no item is then routed for lacking input notes, and the session's
-    // own presentation check still reads the cache before showing one.
-    let draftedInstrumentIds: ReadonlySet<string> = new Set();
+    // provenance that survives a purge of the draft cache: the accept or edit verdict her review log
+    // holds for each (`draftedInstrumentIdsOf`, finding E), with the cache's accepted and edited
+    // records added. A cache that cannot be read leaves the log's answer; a log that cannot be read
+    // leaves the cache's.
+    let cachedDrafts: readonly DraftRecord[] = [];
     try {
-      draftedInstrumentIds = new Set(
-        (await createVaultDraftCacheStore(vault).list()).flatMap((record) =>
-          (record.status === 'accepted' || record.status === 'edited') &&
-          record.instrumentId !== undefined
-            ? [record.instrumentId]
-            : [],
-        ),
-      );
+      cachedDrafts = await createVaultDraftCacheStore(vault).list();
     } catch (error) {
       console.error(
         'Olea: citation-revision could not read the draft cache',
         error instanceof Error ? error.name : 'unknown',
       );
     }
+    const draftedInstrumentIds = draftedInstrumentIdsOf(reviewEntries, cachedDrafts);
 
     // `[D-628]`: each input note's fingerprint read at most once per pass, however many items share it.
     const fingerprints = new Map<VaultPath, Promise<string | undefined>>();
-    const fingerprintOf = (path: VaultPath): Promise<string | undefined> => {
+    // `ol-egov.141.89.2.39` (finding F): a note a rename in flight is moving is read at its new path.
+    const fingerprintOf = (recordedPath: VaultPath): Promise<string | undefined> => {
+      const path = this.renamedPathOf(recordedPath);
       let fingerprint = fingerprints.get(path);
       if (fingerprint === undefined) {
         fingerprint = inputNoteFingerprint(vault, path);
@@ -1128,6 +1210,9 @@ export class CitationRevisionTrigger {
       // `ol-egov.141.89.5.113`: a whole-note anchor saved before every question block was stripped,
       // whose note is otherwise unchanged (set in the whole-note branch below).
       let restrippedBaseline = false;
+      // `ol-egov.141.89.2.39` (finding D): a whole cited note that differs from its anchor only by
+      // frontmatter Olea wrote itself (set in the whole-note branch below).
+      let oleaWritesOnly = false;
       try {
         if (transcriptPath !== undefined && currentRecord !== undefined) {
           // `ol-egov.141.89.5.43`: unchanged, withheld or (re-)seeded is settled there; a passage
@@ -1224,6 +1309,14 @@ export class CitationRevisionTrigger {
           restrippedBaseline =
             canonicalizeForMateriality(stripQuestionBlocks(previous.text)) ===
             canonicalizeForMateriality(wholeNote);
+          // `ol-egov.141.89.2.39` (finding D; `[D-626]`): the frontmatter writes Olea makes itself
+          // (a first-sight stamp, a home note's `topic:` growth or drafted-for record) are not a
+          // change to her material, here as in the input-note fingerprint (one rule,
+          // `stripOleaFrontmatterWrites`). Both sides are stripped at comparison, so an anchor saved
+          // before keeps reading.
+          oleaWritesOnly =
+            canonicalizeForMateriality(stripOleaFrontmatterWrites(previous.text)) ===
+            canonicalizeForMateriality(stripOleaFrontmatterWrites(wholeNote));
         } else if (previous.passageDigest !== undefined) {
           // The instrument itself is gone: there is no passage to judge, and relocating a
           // passage-grain anchor among whole notes would compare the wrong grain.
@@ -1256,6 +1349,7 @@ export class CitationRevisionTrigger {
         current.text !== previous.text &&
         (reformattedByLadder ||
           restrippedBaseline ||
+          oleaWritesOnly ||
           canonicalizeForMateriality(current.text) === canonicalizeForMateriality(previous.text))
       ) {
         report.formattingOnly += 1;
@@ -1269,7 +1363,9 @@ export class CitationRevisionTrigger {
             ? 'passage-reformatted'
             : canonicalizeForMateriality(current.text) === canonicalizeForMateriality(previous.text)
               ? 'formatting-only'
-              : 'question-blocks-restripped',
+              : restrippedBaseline
+                ? 'question-blocks-restripped'
+                : 'olea-frontmatter-writes',
         );
         try {
           await this.deps.store.save(instrumentId, {
@@ -1561,6 +1657,31 @@ export class CitationRevisionTrigger {
       }
     }
 
+    // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`, finding C): a drafted question whose citation
+    // records no page (an item kept before every drafting path cited a note: the heading offer's,
+    // a generation job's) carries no source the walk can follow, so it is not tracked above, yet the
+    // session withholds it for a changed input note or for recording none. It is routed here by the
+    // same rule as a first sighting, so every item withheld for its input notes reaches the rewrite.
+    // Nothing is baselined for it: an untracked question has no anchor to keep.
+    for (const record of exemptRecords) {
+      const instrumentId = record.instrumentId;
+      if (!draftedInstrumentIds.has(instrumentId)) continue;
+      if (stored.has(instrumentId)) continue;
+      if (rejectedInstrumentIds.has(instrumentId)) continue;
+      // An unknown suspension is never taken for none: an unreadable log routes nothing here.
+      if (!suspensionKnown || suspendedIds.has(instrumentId)) continue;
+      await this.routeIfInputNotesChanged(
+        vault,
+        record,
+        undefined,
+        draftedInstrumentIds,
+        materialFor,
+        fingerprintOf,
+        actions,
+        report,
+      );
+    }
+
     return report;
   }
 
@@ -1599,13 +1720,15 @@ export class CitationRevisionTrigger {
         rule = 'input-notes-unrecorded';
         changedKey = 'unrecorded';
       } else {
-        const followed = new Set<string>();
-        if (previous !== undefined) {
-          followed.add(previous.sourcePath);
-          followed.add(citedPassagePath(record));
-          const cited = record.sourceProvenance?.sourcePath;
-          if (cited !== undefined) followed.add(cited);
-        }
+        // With an anchor, the notes it follows are its own to judge. At first sighting every note
+        // is compared, except the single-passage case's note: its passage is seeded by its digest
+        // below (`seedPassageAnchor`), at passage grain, never by a whole-note fingerprint
+        // (`ol-egov.141.89.2.39`, finding B).
+        const passageNote = singlePassageNote(citation, notes);
+        const followed: ReadonlySet<string> =
+          previous !== undefined
+            ? notesFollowedByAnchor(previous.sourcePath, record)
+            : new Set(passageNote === undefined ? [] : [passageNote]);
         const changed = await changedInputNotes(vault, notes, followed, fingerprintOf);
         if (changed.length === 0) return false;
         rule = 'input-note-changed';
@@ -2070,8 +2193,19 @@ export class CitationRevisionTrigger {
     newPath: VaultPath,
   ): Promise<number> {
     if (oldPath === newPath) return 0;
-    const moved = await this.followRenameByKind(vault, oldPath, newPath);
-    return moved + (await this.moveInputNotes(vault, oldPath, newPath));
+    // `ol-egov.141.89.2.39` (finding F): recorded at once, before the moves wait their turn, so a
+    // pass already running reads the old path at the new one; the moves then run between passes.
+    const rename = { from: oldPath, to: newPath };
+    this.renamesInFlight.push(rename);
+    try {
+      return await this.serialised(async () => {
+        const moved = await this.followRenameByKind(vault, oldPath, newPath);
+        return moved + (await this.moveInputNotes(vault, oldPath, newPath));
+      });
+    } finally {
+      const at = this.renamesInFlight.indexOf(rename);
+      if (at !== -1) this.renamesInFlight.splice(at, 1);
+    }
   }
 
   /**

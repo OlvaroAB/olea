@@ -105,7 +105,7 @@ import { deriveDraftId } from './cache-store.js';
 import type { DraftCardsDeps, DraftCardsRequest, DraftCardsResult } from './draft-cards.js';
 import { draftCardsForConcept } from './draft-cards.js';
 import { ensureHomeNoteForConcept, hashSourceRevision, isOleaHomeNote } from './home-note.js';
-import { citationOfInputNote, type InputNote } from './input-notes.js';
+import { citationOfInputNote, type InputNote, internalCitationNote } from './input-notes.js';
 import {
   extractDraftedCards,
   extractDraftedCardsProvenance,
@@ -352,15 +352,18 @@ export async function runGenerationDraftJob(
   const sourceContentHash = (await deps.vault.exists(homeNote))
     ? await hashSourceRevision(await deps.vault.read(homeNote))
     : undefined;
-  // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): every note the request was drawn from; a draft drawn
-  // from one note cites that note (this runner cited nothing before). Several notes: no citation, as
-  // before, and the origin a surface shows is read from the list.
+  // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): every note the request was drawn from, and the note
+  // the draft cites (this runner cited nothing before). One note: that note. Several (findings C, J):
+  // one of them, as the sweep chooses (`internalCitationNote`: the concept's source note when it
+  // supplied a chunk, else the one that supplied the most), built as that note is cited, so the kept
+  // item carries a page and the citation pass tracks it; internal only, since the origin a surface
+  // shows is read from the list.
   const inputNotes: readonly InputNote[] | undefined = drafted.drawnFrom.inputNotes;
-  const onlyNote = inputNotes?.length === 1 ? inputNotes[0] : undefined;
+  const citedNote = internalCitationNote(inputNotes, drafted.drawnFrom.chunkPaths, sourcePath);
   const sourceCitation =
-    onlyNote === undefined
+    citedNote === undefined
       ? undefined
-      : await citationOfInputNote(deps.vault, onlyNote, homeNote, drafted.drawnFrom);
+      : await citationOfInputNote(deps.vault, citedNote, homeNote, drafted.drawnFrom);
 
   const createdAt = now().toISOString();
   let sequence = 0;

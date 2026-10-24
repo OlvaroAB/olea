@@ -20,7 +20,7 @@ import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js'
 import { runGenerationSweep } from '../../src/generation/pipeline.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
-import { SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
+import { SYNTHETIC_INPUT_FILES, SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
 
 const COURSE_FOLDER_NOTE = '01 Courses/COGS214/Week 2.md';
 
@@ -61,7 +61,10 @@ const groundedResponse = (stem: string): DraftQuizCardsResult => ({
 
 describe('runGenerationSweep — D-381 version-aware dedupe', () => {
   it('an unchanged note still dedupes: a second sweep over the same content never drafts again', async () => {
-    const vault = new MemoryVaultSource({ [COURSE_FOLDER_NOTE]: 'the original passage' });
+    const vault = new MemoryVaultSource({
+      ...SYNTHETIC_INPUT_FILES,
+      [COURSE_FOLDER_NOTE]: 'the original passage',
+    });
     const cache = createVaultDraftCacheStore(vault);
     const deps = {
       vault,
@@ -80,7 +83,10 @@ describe('runGenerationSweep — D-381 version-aware dedupe', () => {
   });
 
   it('a materiality-confirmed content change is no longer masked: the old record blocks nothing, and a fresh draft is cached', async () => {
-    const vault = new MemoryVaultSource({ [COURSE_FOLDER_NOTE]: 'the original passage' });
+    const vault = new MemoryVaultSource({
+      ...SYNTHETIC_INPUT_FILES,
+      [COURSE_FOLDER_NOTE]: 'the original passage',
+    });
     const cache = createVaultDraftCacheStore(vault);
     const deps = {
       vault,
@@ -115,7 +121,10 @@ describe('runGenerationSweep — D-381 version-aware dedupe', () => {
   });
 
   it("D-381's clarification: an ACCEPTED record is never rewritten by a redraft triggered after its source changed", async () => {
-    const vault = new MemoryVaultSource({ [COURSE_FOLDER_NOTE]: 'the original passage' });
+    const vault = new MemoryVaultSource({
+      ...SYNTHETIC_INPUT_FILES,
+      [COURSE_FOLDER_NOTE]: 'the original passage',
+    });
     const cache = createVaultDraftCacheStore(vault);
     const deps = {
       vault,
@@ -144,7 +153,7 @@ describe('runGenerationSweep — D-381 version-aware dedupe', () => {
   });
 
   it('a bare drop (no embedding note) is unaffected — version expectation is never computed for it, matching today', async () => {
-    const vault = new MemoryVaultSource();
+    const vault = new MemoryVaultSource({ ...SYNTHETIC_INPUT_FILES });
     const cache = createVaultDraftCacheStore(vault);
     const standalone: ExtractedUnit = {
       text: 'irrelevant',

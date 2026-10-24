@@ -36,7 +36,7 @@ import type {
   DraftQuizCardsResult,
 } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
-import { SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
+import { SYNTHETIC_INPUT_FILES, SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
 
 const COURSE_NOTE = '01 Courses/COGS214/Week 2.md';
 
@@ -90,7 +90,10 @@ function harness(
   defaultConcepts: readonly ConceptRecord[],
   defaultAnswer: (name: string, ordinal: number) => DraftQuizCardsResult,
 ): Harness {
-  const vault = new MemoryVaultSource({ [COURSE_NOTE]: '# Week 2\nnote text v1' });
+  const vault = new MemoryVaultSource({
+    ...SYNTHETIC_INPUT_FILES,
+    [COURSE_NOTE]: '# Week 2\nnote text v1',
+  });
   const cache = createVaultDraftCacheStore(vault);
   const asked: string[] = [];
   const perName = new Map<string, number>();

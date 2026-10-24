@@ -111,6 +111,14 @@ import { recordDraftedFor } from 'olea-core/src/session/drafted-for.js';
 export const HOME_NOTE_MARKER_KEY = 'olea-home-note';
 const HOME_NOTE_MARKER_VALUE = 'true';
 
+/**
+ * The frontmatter key whose list this module grows in a home note (`ensureTopicIncludes`): in one
+ * of Olea's own home notes the list is Olea's bookkeeping, never her words. Exported so the one
+ * reader that must leave Olea's own writes out of a note's material (`strip-olea-frontmatter.ts`'s
+ * `stripOleaFrontmatterWrites`, `[D-626]`) names the same key this writer writes.
+ */
+export const HOME_NOTE_TOPIC_KEY = 'topic';
+
 function fileNameOf(path: VaultPath): string {
   const slash = path.lastIndexOf('/');
   return slash === -1 ? path : path.slice(slash + 1);
@@ -160,7 +168,7 @@ function initialHomeNoteContent(sourcePath: VaultPath): string {
   const fileName = fileNameOf(sourcePath);
   return [
     '---',
-    'topic:',
+    `${HOME_NOTE_TOPIC_KEY}:`,
     `${HOME_NOTE_MARKER_KEY}: ${HOME_NOTE_MARKER_VALUE}`,
     '---',
     '',
@@ -200,12 +208,12 @@ async function ensureTopicIncludes(
   if (frontmatterBlock?.kind !== 'frontmatter') return; // defensive — every home note this module writes has one
 
   const fm = parseFrontmatter(frontmatterBlock.inner);
-  const current = readList(fm, 'topic').items;
+  const current = readList(fm, HOME_NOTE_TOPIC_KEY).items;
   if (current.includes(conceptName)) return; // idempotent — already bound, nothing to grow
 
   const items = [...current, conceptName];
   const newValueRaw = `\n${items.map((name) => `  - ${name}`).join('\n')}\n`;
-  const updatedFm = setEntryValue(fm, 'topic', newValueRaw);
+  const updatedFm = setEntryValue(fm, HOME_NOTE_TOPIC_KEY, newValueRaw);
   const updatedBlockRaw = `---\n${serializeFrontmatter(updatedFm)}---\n`;
 
   const newContent =

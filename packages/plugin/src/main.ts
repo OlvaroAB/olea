@@ -1790,7 +1790,9 @@ export default class OleaPlugin extends Plugin {
               // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): a draft whose input notes no longer read
               // as drafted (or that predates them) is withheld from the list, as from a session.
               holds: (record) =>
-                draftInputNotesHold(vault, record.sourceCitation, record.inputNotes),
+                draftInputNotesHold(vault, record.sourceCitation, record.inputNotes, (path) =>
+                  this.renamedPathOf(path),
+                ),
             }),
           // `[D-216]`/`ol-mbh6`: the clearing row's source peek, mirroring
           // `ReviewView`'s own `instrumentId`-keyed call to the identical
@@ -2485,7 +2487,9 @@ export default class OleaPlugin extends Plugin {
     // citation store ([D-576], `ol-egov.141.89.5.111`), with the text extracted from it this session;
     // and the file's processed-revision row with its version and day. A rename made while Obsidian
     // was closed arrives as a delete and a create, and nothing is moved: its questions are withheld,
-    // and the file has an unknown day.
+    // and the file has an unknown day. `ol-egov.141.89.2.39` (finding F): the trigger records the
+    // rename at once and writes its moves between batch passes, never during one, and a pass or a
+    // presentation check meanwhile reads the note at its new path (`renamedPathOf`).
     this.register(
       vault.watch((event) => {
         if (event.kind !== 'rename' || event.oldPath === undefined) return;
@@ -3471,6 +3475,16 @@ export default class OleaPlugin extends Plugin {
    * depending on `onload`'s closure. Never lets a failure propagate into the
    * interval, same posture every tick in this file takes.
    */
+  /**
+   * `ol-egov.141.89.2.39` (finding F; `[D-576]`, `[D-628]`): where `path` stands now, following a
+   * rename Olea saw whose record moves the citation pass is still writing (`CitationRevisionTrigger.
+   * renamedPathOf`); `path` itself before the pass is composed. Read by the session's presentation
+   * checks and the clearing list, so a rename alone never withholds a question.
+   */
+  private renamedPathOf(path: VaultPath): VaultPath {
+    return this.citationRevision?.renamedPathOf(path) ?? path;
+  }
+
   private async tickCitationRevisions(): Promise<void> {
     const trigger = this.citationRevision;
     if (trigger === null) return;
@@ -4544,6 +4558,9 @@ export default class OleaPlugin extends Plugin {
       redraftSetAsideSuccessor: async (draft) => {
         await this.ingestion?.redraftSetAsideSuccessor?.(draft);
       },
+      // `ol-egov.141.89.2.39` (finding F): a note a rename Olea saw is still moving the records of is
+      // read at its new path by the presentation checks, so a rename alone never sets a question aside.
+      renamedPathOf: (path) => this.renamedPathOf(path),
       // C7.9's containment co-presence filter (`ol-v7r5.7`, `session/build.ts`):
       // the live, served relation fold, read fresh at open time — `[]` before
       // the first corpus-relation batch has run.

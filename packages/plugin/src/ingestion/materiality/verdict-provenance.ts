@@ -36,8 +36,13 @@ import type { PersistedStageProducer } from 'olea-core';
  *  - `question-blocks-restripped`: a whole-note anchor saved before every question block was
  *    stripped holds the same material once stripped by the current rule, where equal canonical
  *    text alone does not settle it.
+ *  - `olea-frontmatter-writes` (`[D-626]`, `ol-egov.141.89.2.39`): a whole cited note reads as its
+ *    anchor once the frontmatter Olea writes itself is left out of both (a first-sight stamp, a home
+ *    note's `topic:` growth or drafted-for record; `strip-olea-frontmatter.ts`'s
+ *    `stripOleaFrontmatterWrites`, the input-note fingerprint's own strip), where
+ *    the rules above do not settle it.
  * Where more than one anchor exit holds, the narrowest names it: the reformat, then
- * formatting-only, then the restrip.
+ * formatting-only, then the restrip, then Olea's own frontmatter writes.
  *  - `passage-relocated`: a passage-grain anchor's passage stands, exactly, in another note, and the
  *    anchor is healed there.
  *  - `relocated-exact`: a whole-note anchor's material stands, whitespace-normalised, in another
@@ -76,6 +81,7 @@ export const VERDICT_CODE_RULES = {
   'no-groundable-content': 1,
   'passage-reformatted': 1,
   'question-blocks-restripped': 1,
+  'olea-frontmatter-writes': 1,
   'passage-relocated': 1,
   'relocated-exact': 1,
   'passage-found-again': 1,

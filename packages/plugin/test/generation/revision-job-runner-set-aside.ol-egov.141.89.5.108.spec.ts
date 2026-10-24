@@ -649,7 +649,8 @@ describe('production composition (ol-egov.141.89.5.108)', () => {
   it("open-session.ts passes it to the drafts' presentation check", () => {
     const session = source('../../src/review/open-session.ts');
     expect(session.replace(/\s+/g, ' ')).toContain(
-      'checkDraftSourceAtPresentation: draftSourceCheckAtPresentation( input.vault, pendingDrafts, input.redraftSetAsideSuccessor, )',
+      // `ol-egov.141.89.2.39` (finding F): then what it reads each draft afresh through.
+      'checkDraftSourceAtPresentation: draftSourceCheckAtPresentation( input.vault, pendingDrafts, input.redraftSetAsideSuccessor, {',
     );
   });
 });

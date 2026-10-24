@@ -237,8 +237,14 @@ import {
 } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
-import { draftInputNotesHold } from '../generation/input-notes.js';
+import {
+  draftedInstrumentIdsOf,
+  draftInputNotesHold,
+  keptInputNotesHold,
+  type PathNow,
+} from '../generation/input-notes.js';
 import { toDraftReviewQueueItem } from '../generation/review-adapter.js';
+import { stripOleaFrontmatterWrites } from '../generation/strip-olea-frontmatter.js';
 import type { DraftRecord } from '../generation/types.js';
 import {
   evaluateInstrumentStanding,
@@ -250,6 +256,7 @@ import { stripQuestionBlocks } from '../ingestion/materiality/citation-material.
 import {
   citedPassagePath,
   HIDDEN_PATH_SEGMENT,
+  notesFollowedByAnchor,
 } from '../ingestion/materiality/citation-revision-wiring.js';
 import { resolveAnchoredPassage } from '../ingestion/materiality/passage-grain.js';
 import { transcriptAnchorCheck } from '../ingestion/materiality/transcript-grain.js';
@@ -388,6 +395,13 @@ export interface OpenReviewSessionInput {
    * failure here never changes that. Omitted: set aside, nothing more, as before.
    */
   readonly redraftSetAsideSuccessor?: (draft: DraftRecord) => Promise<void>;
+  /**
+   * `ol-egov.141.89.2.39` (finding F; `[D-576]`, `[D-628]`): where a recorded input-note path stands
+   * now, given a rename Olea saw whose moves are still being written (`main.ts` composes the citation
+   * pass's `renamedPathOf`). The presentation checks read an input note through it, so a rename alone
+   * never sets a question aside. Omitted: every path is read as recorded.
+   */
+  readonly renamedPathOf?: (path: VaultPath) => VaultPath;
   /**
    * `part-of` edges available at composition time (C7.9; `ol-v7r5.7`) —
    * forwarded straight to `buildReviewSession`'s `relations` input, which
@@ -1038,18 +1052,14 @@ export async function openReviewSession(
     // anything `composeQueue`/`executeStudyPlan` decided.
     const allDrafts = input.draftCache ? await input.draftCache.list() : [];
     const pendingDrafts = allDrafts.filter((record) => record.status === 'pending');
-    // `[D-628]` (`ol-egov.141.89.2.39`): the kept items Olea drafted through a draft record — their
-    // provenance, read from the draft cache (an accepted or edited record names the instrument it
-    // became). Only these are protected as drafted items with no input notes recorded; her own
-    // question blocks and a practice paper's items have no draft record and are untouched.
-    const draftedInstrumentIds: ReadonlySet<string> = new Set(
-      allDrafts.flatMap((record) =>
-        (record.status === 'accepted' || record.status === 'edited') &&
-        record.instrumentId !== undefined
-          ? [record.instrumentId]
-          : [],
-      ),
-    );
+    // `[D-628]` (`ol-egov.141.89.2.39`): the kept items Olea drafted through a draft record, by
+    // provenance that survives a purge of the draft cache (finding E): the accept or edit verdict
+    // her review log holds for each, read from the same `composed.entries` this module already
+    // holds, with the cache's accepted and edited records added (`draftedInstrumentIdsOf`). Only
+    // these are protected as drafted items with no input notes recorded; her own question blocks and
+    // a practice paper's items carry no such verdict and are untouched.
+    const draftedInstrumentIds = draftedInstrumentIdsOf(composed.entries, allDrafts);
+    const pathNow: PathNow = input.renamedPathOf ?? ((path) => path);
     const draftItems = pendingDrafts.map((record) => toDraftReviewQueueItem(record, input.random));
     // `[D-627]` (`ol-3ux7.5.57.98`): exact duplicate content is served once, the first occurrence
     // kept, so a due instrument wins over a pending draft. Nothing is merged or written; see
@@ -1123,7 +1133,7 @@ export async function openReviewSession(
                     (record) => record.instrumentId === instrumentId,
                   ),
               },
-              { vault: input.vault, draftedInstrumentIds },
+              { vault: input.vault, draftedInstrumentIds, pathNow },
             ),
           }
         : {
@@ -1137,7 +1147,7 @@ export async function openReviewSession(
                     (record) => record.instrumentId === instrumentId,
                   ),
               },
-              { vault: input.vault, draftedInstrumentIds },
+              { vault: input.vault, draftedInstrumentIds, pathNow },
             ),
           }),
       // `ol-egov.141.89.5.73` ([D-515]): a pending draft on a non-markdown source, against its own citation.
@@ -1146,6 +1156,9 @@ export async function openReviewSession(
         input.vault,
         pendingDrafts,
         input.redraftSetAsideSuccessor,
+        // `ol-egov.141.89.2.39` (finding F): each draft read afresh at its presentation, so a rename
+        // Olea moved onto its record meanwhile is seen, and one still being moved is followed.
+        { ...(input.draftCache ? { cache: input.draftCache } : {}), pathNow },
       ),
       // Always wired, unconditionally — unlike the caller-supplied ports
       // above, this is computed HERE (see `liveSchedulingObservations`
@@ -1763,6 +1776,13 @@ export function sourceCheckAtPresentation(
     if (readSuspended !== undefined && (await readSuspended()).has(instrumentId)) {
       return 'suspended';
     }
+    // `ol-egov.141.89.2.39` (findings A, B): the notes the anchor's own checks judged this
+    // presentation, left out of the input-note comparison below as the citation pass leaves them
+    // out (`notesFollowedByAnchor`); `undefined` when no anchor was read.
+    let followedByAnchor: ReadonlySet<string> | undefined;
+    // A lecture-transcript anchor that read as it holds: its reading decides the transcript, and
+    // changed bytes alone never withhold (below).
+    let transcriptCleared = false;
     if (store !== undefined) {
       const anchor = (await store.loadAll()).get(instrumentId);
       if (anchor !== undefined) {
@@ -1776,27 +1796,39 @@ export function sourceCheckAtPresentation(
         if (currentPassage !== undefined) {
           // `ol-egov.141.89.5.97` ([D-567], [D-543]): a lecture-transcript anchor is read at its own
           // grain, as the citation pass reads it: its part's passage, or the whole transcript when
-          // the citation names no part. That reading decides; changed bytes alone never withhold.
+          // the citation names no part. That reading decides the transcript; changed bytes alone
+          // never withhold. `ol-egov.141.89.2.39` (finding A): it does not decide the item's other
+          // input notes, which are still compared below whatever the citation's kind.
           const transcript = await transcriptAnchorAtPresentation(
             instrumentId,
             anchor,
             currentPassage,
           );
-          if (transcript !== undefined) return transcript ? 'clear' : 'check-failed';
-          if (!(await citedPassageUnchanged(instrumentId, anchor, currentPassage))) {
-            return 'check-failed';
+          if (transcript === false) return 'check-failed';
+          if (transcript === undefined) {
+            if (!(await citedPassageUnchanged(instrumentId, anchor, currentPassage))) {
+              return 'check-failed';
+            }
+          } else {
+            transcriptCleared = true;
+          }
+          const record = currentPassage.recordOf(instrumentId);
+          if (record !== undefined) {
+            followedByAnchor = notesFollowedByAnchor(anchor.sourcePath, record);
           }
         }
       }
     }
     // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): every note a drafted item was drawn from, read
-    // afresh and compared by fingerprint, whether or not a store is supplied.
+    // afresh and compared by fingerprint, whether or not a store is supplied, and whatever its
+    // citation's kind (finding A).
     if (
       inputNotes !== undefined &&
-      !(await inputNotesHoldAtPresentation(instrumentId, inputNotes))
+      !(await inputNotesHoldAtPresentation(instrumentId, inputNotes, followedByAnchor))
     ) {
       return 'check-failed';
     }
+    if (transcriptCleared) return 'clear';
     // `ol-egov.141.89.5.73` ([D-515]): last, after every check above, and whether or not a store
     // is supplied. Nothing is cached: one sidecar read and one file read per presentation.
     if (currentPassage === undefined) return 'clear';
@@ -1808,20 +1840,24 @@ export function sourceCheckAtPresentation(
 
 /**
  * `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): what the presentation check needs to protect a kept
- * item by every note it was drafted from. `draftedInstrumentIds` is provenance, read from the draft
- * cache (the kept items Olea drafted through a draft record), never inferred from an absent list.
+ * item by every note it was drafted from. `draftedInstrumentIds` is provenance (the kept items Olea
+ * drafted through a draft record: the accept or edit verdicts in her review log, with the draft
+ * cache's accepted and edited records added, `draftedInstrumentIdsOf`), never inferred from an
+ * absent list.
  */
 export interface InputNotesAtPresentation {
   readonly vault: VaultSource;
   readonly draftedInstrumentIds: ReadonlySet<string>;
+  /** `ol-egov.141.89.2.39` (finding F): see `OpenReviewSessionInput.renamedPathOf`. Omitted: as recorded. */
+  readonly pathNow?: PathNow;
 }
 
 /**
  * `[D-626]`/`[D-628]` (functional scope C5.3): whether a kept item's input notes all still read as
  * they did when it was drafted. Its citation record's input notes are each read afresh and compared
- * by fingerprint (`draftInputNotesHold`), so a change to any of them past the code's free exits
- * withholds it, at whole-note grain, as a change to its cited note does; the single-passage case
- * keeps passage grain for its note. A missing note, or a record that cannot be read, withholds.
+ * by fingerprint (`keptInputNotesHold`), so a change to any of them past the code's free exits
+ * withholds it, at whole-note grain, as a change to its cited note does; the notes its anchor
+ * follows are judged by the anchor's own checks above (the single-passage case at passage grain). A missing note, or a record that cannot be read, withholds.
  * An item recorded before input notes were (no list on its record) is withheld only when it was
  * drafted through a draft record (`draftedInstrumentIds`); any other item (her own question block,
  * a practice paper's item) has nothing here to check and is clear. Reads only.
@@ -1829,12 +1865,18 @@ export interface InputNotesAtPresentation {
 async function inputNotesHoldAtPresentation(
   instrumentId: string,
   reader: InputNotesAtPresentation,
+  followedByAnchor: ReadonlySet<string> | undefined,
 ): Promise<boolean> {
   try {
     const record = await readInstrumentCitationRecord(reader.vault, instrumentId);
     const notes = record?.inputNotes;
-    if (notes === undefined) return !reader.draftedInstrumentIds.has(instrumentId);
-    return await draftInputNotesHold(reader.vault, record, notes);
+    if (record === undefined || notes === undefined) {
+      return !reader.draftedInstrumentIds.has(instrumentId);
+    }
+    // `ol-egov.141.89.2.39` (findings A, B): with an anchor read, the notes it follows are its own
+    // to judge (the single-passage note at passage grain, with its free exits), never a second
+    // digest lookup here; every other note by fingerprint (`keptInputNotesHold`).
+    return await keptInputNotesHold(reader.vault, record, notes, followedByAnchor, reader.pathNow);
   } catch {
     return false;
   }
@@ -1926,8 +1968,23 @@ export function draftSourceCheckAtPresentation(
   vault: VaultSource,
   drafts: readonly DraftRecord[],
   redraftSetAside?: (draft: DraftRecord) => Promise<void>,
+  current: DraftsAtPresentation = {},
 ): (draftId: string) => Promise<'clear' | 'check-failed'> {
   const byId = new Map(drafts.map((draft) => [draft.draftId, draft]));
+  const pathNow: PathNow = current.pathNow ?? ((path) => path);
+  // `ol-egov.141.89.2.39` (finding F): the record as it stands when the draft is shown, so a rename
+  // Olea moved onto it after the session opened is read at the note's new path. The session's own
+  // copy stands in when the cache cannot answer (unreadable, or purged meanwhile).
+  const draftNow = async (draftId: string): Promise<DraftRecord | undefined> => {
+    const held = byId.get(draftId);
+    if (held === undefined || current.cache === undefined) return held;
+    try {
+      const fresh = await current.cache.get(draftId);
+      return fresh !== null && fresh.status === 'pending' ? fresh : held;
+    } catch {
+      return held;
+    }
+  };
   const setAside = async (draft: DraftRecord): Promise<'check-failed'> => {
     if (redraftSetAside !== undefined && draft.predecessorInstrumentId !== undefined) {
       try {
@@ -1939,12 +1996,12 @@ export function draftSourceCheckAtPresentation(
     return 'check-failed';
   };
   return async (draftId) => {
-    const draft = byId.get(draftId);
+    const draft = await draftNow(draftId);
     if (draft === undefined) return 'clear';
     // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): every note the draft was drawn from must read as
     // it did when drafted (passage grain for the single-passage case). A draft recorded before input
     // notes were cannot show it and is withheld; the sweep drafts it again (`cache-store.ts`).
-    if (!(await draftInputNotesHold(vault, draft.sourceCitation, draft.inputNotes))) {
+    if (!(await draftInputNotesHold(vault, draft.sourceCitation, draft.inputNotes, pathNow))) {
       return setAside(draft);
     }
     const citation = draft.sourceCitation;
@@ -1955,11 +2012,23 @@ export function draftSourceCheckAtPresentation(
     ) {
       return 'clear';
     }
-    if (await bytesMatchRevision(vault, citation.sourcePath, citation.sourceRevision)) {
+    if (await bytesMatchRevision(vault, pathNow(citation.sourcePath), citation.sourceRevision)) {
       return 'clear';
     }
     return setAside(draft);
   };
+}
+
+/**
+ * `ol-egov.141.89.2.39` (finding F): what the pending-draft presentation check reads beside the
+ * session's own copy of its drafts — the draft cache, so each draft is read as it stands when shown
+ * (a rename Olea saw moves its input-note paths on the record), and where a note a rename is still
+ * moving stands now (`OpenReviewSessionInput.renamedPathOf`). Both optional: omitted, the session's
+ * copy is read as recorded, as before.
+ */
+export interface DraftsAtPresentation {
+  readonly cache?: Pick<DraftCacheStore, 'get'>;
+  readonly pathNow?: PathNow;
 }
 
 /**
@@ -2005,7 +2074,13 @@ async function citedPassageUnchanged(
       const current = await material(citedPath);
       return (
         current === anchor.text ||
-        canonicalizeForMateriality(current) === canonicalizeForMateriality(anchor.text)
+        canonicalizeForMateriality(current) === canonicalizeForMateriality(anchor.text) ||
+        // `ol-egov.141.89.2.39` (finding D; `[D-626]`): the frontmatter Olea writes itself is not a
+        // change to her material — the citation pass's own exit (`olea-frontmatter-writes`), one
+        // rule (`stripOleaFrontmatterWrites`, as the input-note fingerprint reads), both sides
+        // stripped so an anchor saved before still reads.
+        canonicalizeForMateriality(stripOleaFrontmatterWrites(current)) ===
+          canonicalizeForMateriality(stripOleaFrontmatterWrites(anchor.text))
       );
     }
     const resolution = await resolveAnchoredPassage(

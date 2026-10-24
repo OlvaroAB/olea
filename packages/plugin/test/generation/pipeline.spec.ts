@@ -56,7 +56,7 @@ import {
 import { describeRefusal } from '../../src/retrieval/draft-cards-copy.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
-import { SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
+import { SYNTHETIC_INPUT_FILES, SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
 
 /** The permanent concept key (`[D-357]`) the vault's own stamped extraction resolves for `name`. */
 async function permanentKey(vault: MemoryVaultSource, name: string): Promise<string> {
@@ -538,7 +538,7 @@ describe("a bare drop with no embedding note — Olea's own home note (`[D-179]`
   });
 
   it('is idempotent: a later sweep drafting a second concept reuses the same note and grows its topic list', async () => {
-    const vault = new MemoryVaultSource();
+    const vault = new MemoryVaultSource({ ...SYNTHETIC_INPUT_FILES });
     const cache = createVaultDraftCacheStore(vault);
 
     await runGenerationSweep([standaloneUnit(SOURCE_PATH)], {
@@ -1160,7 +1160,7 @@ describe('the sweep carries explicit recall intent as authoring intent only (row
   });
 
   it('counts one served outcome per concept asked, refused or drafted, and none for a concept not asked', async () => {
-    const vault = new MemoryVaultSource();
+    const vault = new MemoryVaultSource({ ...SYNTHETIC_INPUT_FILES });
     const cache = createVaultDraftCacheStore(vault);
     const counter = new DemandRoutingCounter();
     // 'Cached concept' already has a draft, so the sweep skips it without asking.

@@ -202,13 +202,17 @@ export interface DraftRecord {
    * when she keeps it (schema version 3). Each protects the draft: a change to any of them that gets
    * past the code's free exits withholds it before presentation and refuses its acceptance
    * (functional scope C5.3, `[D-626]`). When there is one, `sourceCitation` names that note; when
-   * there are several, `sourceCitation` keeps the value it always had for internal readers and no
-   * surface shows it as the draft's sole source (F3.3, `[D-628]`).
+   * there are several, `sourceCitation` names one of them for internal readers (the concept's note
+   * when it is one, otherwise the note that supplied the most chunks, ties by retrieval rank:
+   * `input-notes.ts`'s `internalCitationNote`, `ol-egov.141.89.2.39`), so the kept item carries a
+   * page and the citation pass tracks it, and no surface shows it as the draft's sole source (F3.3,
+   * `[D-628]`).
    *
    * **Absent: a draft recorded before input notes were.** No such record says how many chunks its
    * request supplied, so none can establish the single-passage case: it is withheld wherever it
    * would be shown (the session's presentation check, the clearing list), and the sweep drafts it
-   * again beside it (`cache-store.ts`'s `findByKey`, `requireInputNotes`). Never present and empty.
+   * again beside it (`cache-store.ts`'s `findByKey`, `requireInputNotes`); so is a pending draft
+   * one of whose input notes no longer reads as recorded (`pendingHolds`). Never present and empty.
    */
   readonly inputNotes?: readonly CitationInputNote[];
   /**

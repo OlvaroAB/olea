@@ -359,6 +359,51 @@ describe('a draft drawn from one note cites that note', () => {
   });
 });
 
+// `ol-egov.141.89.2.39` (finding J; [D-628]'s citation rule): a draft drawn from several notes still
+// cites one it was drawn from — internally only, since the clearing list shows the "Sources" list.
+describe('a draft drawn from several notes cites one of them, never a note it was not drawn from', () => {
+  const conceptChunk = (index: PersistedKeywordIndex) => {
+    const own = index.documents.find((document) => document.path === CONCEPT_NOTE)?.blocks.at(-1);
+    if (own === undefined) throw new Error('the concept note has no block');
+    return { path: CONCEPT_NOTE, blockIndex: own.blockIndex, text: own.text };
+  };
+
+  it('the concept’s note supplied nothing: the note that supplied the most chunks', async () => {
+    const vault = world();
+    const index = await indexOf(vault);
+    grounding.chunks = [
+      chunkOf(index, NOTE_A, A1),
+      chunkOf(index, NOTE_B, B1),
+      chunkOf(index, NOTE_B, B2),
+    ];
+    const { pending } = await sweep(vault, draftingOver(vault, index));
+    expect(pending[0]?.inputNotes?.map((note) => note.path)).toEqual([NOTE_A, NOTE_B]);
+    expect(pending[0]?.sourceCitation).toEqual({ sourcePath: NOTE_B, page: 1 });
+  });
+
+  it('a tie on chunks: the note retrieval ranked first', async () => {
+    const vault = world();
+    const index = await indexOf(vault);
+    grounding.chunks = [chunkOf(index, NOTE_C, C1), chunkOf(index, NOTE_A, A1)];
+    const { pending } = await sweep(vault, draftingOver(vault, index));
+    expect(pending[0]?.sourceCitation).toEqual({ sourcePath: NOTE_C, page: 1 });
+  });
+
+  it('the concept’s note is one of them: it is the one cited, whatever the others supplied', async () => {
+    const vault = world();
+    const index = await indexOf(vault);
+    grounding.chunks = [
+      chunkOf(index, NOTE_B, B1),
+      chunkOf(index, NOTE_B, B2),
+      conceptChunk(index),
+    ];
+    const { pending } = await sweep(vault, draftingOver(vault, index));
+    expect(pending[0]?.inputNotes?.map((note) => note.path)).toEqual([NOTE_B, CONCEPT_NOTE]);
+    expect(pending[0]?.sourceCitation?.sourcePath).toBe(CONCEPT_NOTE);
+    expect(pending[0]?.sourceCitation?.passageDigest).toBeUndefined();
+  });
+});
+
 describe('only a genuinely single-passage request keeps passage grain', () => {
   it('one chunk that is exactly one passage of its note: that passage’s digest, protected at passage grain', async () => {
     const vault = world();

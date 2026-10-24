@@ -173,8 +173,10 @@
  * unit of it, the transcript-part route for a transcript; a note no unit of this sweep came from is
  * cited as an authored note, a binary by its page and bytes revision, a transcript as a whole), so
  * the concept's own note is never named unless it supplied the chunks. When it holds several, the
- * citation keeps the value it always had (the landed unit's), for internal readers only: every
- * surface that shows a draft's origin reads the list instead (F3.3, `[D-628]`).
+ * citation still names one of them (`ol-egov.141.89.2.39`, finding J): the concept's note when it is
+ * one, otherwise the note that supplied the most chunks, ties by retrieval rank, built the same way.
+ * It is for internal readers only (the citation pass tracks the item by it): every surface that
+ * shows a draft's origin reads the list instead (F3.3, `[D-628]`).
  *
  * **A lecture transcript's citation (`ol-egov.141.89.5.97`, `[D-567]`, `[D-518]`).** A unit that
  * is a transcript part (the queue's `transcriptPart` marker) is cited with the bytes hash of the
@@ -270,7 +272,7 @@ import type {
 } from '../retrieval/draft-quiz-cards.js';
 import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
-import { deriveDraftId } from './cache-store.js';
+import { deriveDraftId, unusedDraftId } from './cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from './constants.js';
 import {
   type DraftCardsDeps,
@@ -286,7 +288,12 @@ import {
 } from './draft-demand.js';
 import { soleGroundingChunk, withGroundingPassage } from './grounding-passage.js';
 import { ensureHomeNoteForConcept, hashSourceRevision } from './home-note.js';
-import { citationOfInputNote, type InputNote } from './input-notes.js';
+import {
+  citationOfInputNote,
+  draftInputNotesHold,
+  type InputNote,
+  internalCitationNote,
+} from './input-notes.js';
 import {
   extractDraftedCards,
   extractDraftedCardsProvenance,
@@ -1064,11 +1071,15 @@ async function citationOfUnit(
 
 /**
  * `ol-egov.141.89.2.39` (`[D-626]`, `[D-628]`): the citation every record of one drafting call
- * carries. One input note: that note, built by {@link citationOfUnit} when a unit of this sweep
- * came from it (the sweep's own unit first), else by `citationOfInputNote` (`./input-notes.ts`).
- * Several input notes, or none reported: the sweep's own unit's citation, as it always was (no
- * passage digest can arise: several notes means several chunks, and the sole-chunk rule names
- * nothing then).
+ * carries, always naming a note the draft was drawn from. One input note: that note. Several
+ * (finding J): the concept's note (the sweep's own unit's source) when it is one of them, otherwise
+ * the input note that supplied the most chunks, ties broken by retrieval rank
+ * (`internalCitationNote`); internal only, since every surface that shows a draft's origin reads
+ * the list. The chosen note is cited by {@link citationOfUnit} when a unit of this sweep came from
+ * it (the sweep's own unit first), else by `citationOfInputNote` (`./input-notes.ts`). No passage
+ * digest can arise for several notes: several notes means several chunks, and the sole-chunk rule
+ * names nothing then. None reported (a drafting call made without the vault): the sweep's own
+ * unit's citation, as it always was.
  */
 async function sweepDraftCitation(
   vault: VaultSource,
@@ -1087,16 +1098,20 @@ async function sweepDraftCitation(
   },
 ): Promise<InstrumentCitation | undefined> {
   const { sourceChunks } = result.request;
-  const only = result.inputNotes?.length === 1 ? result.inputNotes[0] : undefined;
-  if (only !== undefined) {
+  const cited = internalCitationNote(
+    result.inputNotes,
+    result.chunkPaths,
+    sourceUnit?.provenance.sourcePath,
+  );
+  if (cited !== undefined) {
     const unit =
-      sourceUnit?.provenance.sourcePath === only.path
+      sourceUnit?.provenance.sourcePath === cited.path
         ? sourceUnit
-        : units.find((candidate) => candidate.provenance.sourcePath === only.path);
+        : units.find((candidate) => candidate.provenance.sourcePath === cited.path);
     if (unit !== undefined) {
       return citationOfUnit(vault, unit, units, sourceRevisions, notePath, sourceChunks);
     }
-    return citationOfInputNote(vault, only, notePath, result);
+    return citationOfInputNote(vault, cited, notePath, result);
   }
   return sourceUnit === undefined
     ? undefined
@@ -1340,8 +1355,13 @@ export async function runGenerationSweep(
     // `[D-628]` (`ol-egov.141.89.2.39`): a pending draft recorded before input notes were is stale
     // whatever the note's digest says (`FindByKeyVersionExpectation.requireInputNotes`), so the sweep
     // drafts it again.
+    // `ol-egov.141.89.2.39` (finding G): and a pending draft one of whose input notes no longer reads
+    // as recorded is stale too, by the very check that withholds it at presentation, so the concept
+    // is drafted again instead of the withheld draft counting as a duplicate for ever.
     const courseVersionExpectation = {
       requireInputNotes: true,
+      pendingHolds: (record: DraftRecord) =>
+        draftInputNotesHold(deps.vault, record.sourceCitation, record.inputNotes),
       ...(courseSourceContentHash === undefined
         ? {}
         : { sourceContentHash: courseSourceContentHash }),
@@ -1638,9 +1658,20 @@ export async function runGenerationSweep(
         // `ol-egov.141.89.2.39`: a stale record with no note digest to key the redo by (a bare drop
         // whose pending draft predates input notes) is keyed by the new draft's input notes instead,
         // so the redo never lands on the stale record's path.
-        const draftId = staleRecordExists
-          ? await deriveDraftId(courseCode, candidate.name, sequence, redoKey)
-          : await generateDraftId(courseCode, candidate.name, sequence);
+        // `ol-egov.141.89.2.39` (finding H): and never onto any record already on file, whatever its
+        // status: a redo of a redo can derive the id an earlier redo holds (its note digest
+        // unchanged while its input notes moved on), so the id is checked and stepped past it
+        // (`unusedDraftId`), never `put()` over it.
+        const draftId = await unusedDraftId(
+          deps.cache,
+          staleRecordExists
+            ? await deriveDraftId(courseCode, candidate.name, sequence, redoKey)
+            : await generateDraftId(courseCode, candidate.name, sequence),
+          courseCode,
+          candidate.name,
+          sequence,
+          redoKey,
+        );
         const record: DraftRecord = {
           draftId,
           status: 'pending',

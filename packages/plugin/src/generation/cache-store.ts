@@ -241,13 +241,23 @@ export interface FindByKeyVersionExpectation {
    * is protected by its own presentation check and rewrite route, and a rejected one stays rejected.
    */
   readonly requireInputNotes?: boolean;
+  /**
+   * `ol-egov.141.89.2.39` (finding G; `[D-626]`): when supplied, a still-`pending` record for which
+   * this answers `false` is stale — a draft one of whose input notes no longer reads as recorded, so
+   * it is withheld wherever it would be shown, and the sweep drafts the concept again rather than
+   * counting the withheld draft as a duplicate. The sweep supplies the presentation check itself
+   * (`input-notes.ts`'s `draftInputNotesHold`), so a draft is stale here exactly when it would be
+   * withheld. As for `requireInputNotes`, an accepted, edited or rejected record is never stale on
+   * this ground. A throw reads as stale.
+   */
+  readonly pendingHolds?: (record: DraftRecord) => Promise<boolean>;
 }
 
 /** True when `record` is fresh against `expected` — see `FindByKeyVersionExpectation`'s doc. `expected` itself omitted means "version-blind," always fresh. */
-function matchesVersionExpectation(
+async function matchesVersionExpectation(
   record: DraftRecord,
   expected: FindByKeyVersionExpectation | undefined,
-): boolean {
+): Promise<boolean> {
   if (expected === undefined) return true;
   if (
     expected.sourceContentHash !== undefined &&
@@ -268,7 +278,60 @@ function matchesVersionExpectation(
   ) {
     return false;
   }
+  if (expected.pendingHolds !== undefined && record.status === 'pending') {
+    try {
+      if (!(await expected.pendingHolds(record))) return false;
+    } catch {
+      return false;
+    }
+  }
   return true;
+}
+
+/**
+ * `ol-egov.141.89.2.39` (finding H; D-381, INV-2): an id for a NEW draft record that no record on
+ * file holds, whatever that record's status — `preferredId` when it is free, otherwise the first id
+ * in `deriveDraftId`'s 4-argument space keyed by `redoKey` and an attempt counter that is free. A
+ * new draft is never `put()` over an existing record by an id collision: not over a pending draft
+ * (an earlier redo whose input notes have since changed is withheld, but kept), and never over an
+ * accepted, edited or rejected one, whose record is her decision. Deterministic for a given vault
+ * state, so ids stay reproducible. Throws only when no free id is found within a generous bound.
+ */
+export async function unusedDraftId(
+  cache: Pick<DraftCacheStore, 'get'>,
+  preferredId: string,
+  courseCode: string,
+  conceptName: string,
+  sequence: number,
+  redoKey: string,
+): Promise<string> {
+  if ((await cache.get(preferredId)) === null && !(await draftFileExists(cache, preferredId))) {
+    return preferredId;
+  }
+  for (let attempt = 1; attempt <= UNUSED_DRAFT_ID_ATTEMPTS; attempt += 1) {
+    const id = await deriveDraftId(courseCode, conceptName, sequence, `${redoKey}#${attempt}`);
+    if ((await cache.get(id)) === null && !(await draftFileExists(cache, id))) return id;
+  }
+  throw new Error(
+    `unusedDraftId: no free draft id after ${UNUSED_DRAFT_ID_ATTEMPTS} attempts — refusing to overwrite a draft record`,
+  );
+}
+
+/** How many alternate ids {@link unusedDraftId} tries before refusing. */
+const UNUSED_DRAFT_ID_ATTEMPTS = 64;
+
+/**
+ * Whether a file stands at `draftId`'s path even though `get` could not read it as a draft (a
+ * corrupt or half-synced record): such a file is never written over either. Only a store that can
+ * say so answers; any other reads as no file.
+ */
+async function draftFileExists(
+  cache: Pick<DraftCacheStore, 'get'> & {
+    readonly hasFile?: (draftId: string) => Promise<boolean>;
+  },
+  draftId: string,
+): Promise<boolean> {
+  return cache.hasFile === undefined ? false : await cache.hasFile(draftId);
 }
 
 export interface DraftCacheStore {
@@ -371,8 +434,14 @@ export async function purgeDraftCache(
   });
 }
 
-export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore {
-  const store: DraftCacheStore = {
+export function createVaultDraftCacheStore(
+  vault: VaultSource,
+): DraftCacheStore & { readonly hasFile: (draftId: string) => Promise<boolean> } {
+  const store: DraftCacheStore & { readonly hasFile: (draftId: string) => Promise<boolean> } = {
+    async hasFile(draftId) {
+      return vault.exists(draftPath(draftId));
+    },
+
     async get(draftId) {
       const path = draftPath(draftId);
       if (!(await vault.exists(path))) return null;
@@ -433,7 +502,7 @@ export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore 
           // record drafted in its place sits at another id (`deriveDraftId`'s 4-argument form),
           // which only the index names, so the index is still read for one before answering
           // "nothing blocks" — otherwise the redraft would be drafted again at every sweep.
-          if (matchesVersionExpectation(probed, expected)) return probed;
+          if (await matchesVersionExpectation(probed, expected)) return probed;
           return freshIndexedRecord(probeId);
         }
       }
@@ -451,7 +520,7 @@ export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore 
           if (entry.courseCode !== courseCode || entry.conceptName !== conceptName) continue;
           if (entry.draftId === skip) continue;
           const found = await store.get(entry.draftId);
-          if (found !== null && matchesVersionExpectation(found, expected)) return found;
+          if (found !== null && (await matchesVersionExpectation(found, expected))) return found;
         }
         return null;
       }

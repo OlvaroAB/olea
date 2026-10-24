@@ -953,8 +953,9 @@ describe('the bulk-review triage view is registered and reachable (F3.3, ol-jie3
     expect(main).toMatch(
       /\(\) => this\.lastGenerationRefusals,\s*\(notePath\) =>\s*void createObsidianOpenSourceLocationPort\(this\.app\)\.open\(\{ sourcePath: notePath \}\),\s*\),/,
     );
+    // `ol-egov.141.89.2.39` (finding F): a note a rename is still moving is read at its new path.
     expect(main).toMatch(
-      /holds: \(record\) =>\s*draftInputNotesHold\(vault, record\.sourceCitation, record\.inputNotes\),/,
+      /holds: \(record\) =>\s*draftInputNotesHold\(vault, record\.sourceCitation, record\.inputNotes, \(path\) =>\s*this\.renamedPathOf\(path\),\s*\),/,
     );
   });
 });

@@ -10,7 +10,7 @@ import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js'
 import { runGenerationSweep } from '../../src/generation/pipeline.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
-import { SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
+import { SYNTHETIC_INPUT_FILES, SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
 
 const COURSE = 'COURSE-A';
 const NOTE = `01 Courses/${COURSE}/Concepts.md`;
@@ -52,6 +52,7 @@ async function sweepOnce(
   nullFor?: string,
 ): Promise<string[]> {
   const vault = new MemoryVaultSource({
+    ...SYNTHETIC_INPUT_FILES,
     [NOTE]: '---\ncourse: COURSE-A\n---\n\nSome prose.\n',
   });
   const asks: string[] = [];
@@ -110,7 +111,10 @@ describe('[D-368] the sweep orders its first calls by the drain-order key (ol-eg
   });
 
   it('no concept is skipped: the ones the cap did not reach are asked on the next sweep', async () => {
-    const vault = new MemoryVaultSource({ [NOTE]: '---\ncourse: COURSE-A\n---\n\nSome prose.\n' });
+    const vault = new MemoryVaultSource({
+      ...SYNTHETIC_INPUT_FILES,
+      [NOTE]: '---\ncourse: COURSE-A\n---\n\nSome prose.\n',
+    });
     const cache = createVaultDraftCacheStore(vault);
     const asks: string[] = [];
     const need: Record<string, number> = { Alpha: 0, Beta: 0, Gamma: 1, Delta: 0, Epsilon: 1 };
