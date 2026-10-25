@@ -47,11 +47,12 @@
  * re-run at each landing of that course's material (not on the 30-second
  * tick, which runs no sweep), converges on the same set eventually and is a
  * correct, if coarse-grained, reading of F3.3's "when material lands" for a
- * first build. Concepts beyond the per-sweep cap wait for that course's next
- * landing. F3.7's mastery/yield ORDERING reaches the sweep through the optional
+ * first build. If a per-sweep bound returns (unbounded during development,
+ * [D-653]), concepts beyond it wait for that course's next landing. F3.7's mastery/yield ORDERING reaches the sweep through the optional
  * `deps.drainOrderFor` (`[D-368]`: need, then expected yield, the rotation as the
- * tie-break); with it absent the order is the rotation, and the small cap in
- * `constants.ts`'s `MAX_CONCEPTS_PER_SWEEP` bounds the cost of that gap.
+ * tie-break); with it absent the order is the rotation, and
+ * `constants.ts`'s `MAX_CONCEPTS_PER_SWEEP` (unbounded during development,
+ * [D-653]) no longer bounds the cost of that gap.
  *
  * **A refused concept gets no cache entry, by construction (F4.5's
  * grounded-by-construction argument).** `draftQuizCardsForConcept` already
@@ -478,7 +479,7 @@ export interface GenerationRefusalNotice {
 }
 
 export interface GenerationSweepReport {
-  /** Concepts a drafting call was actually made for this sweep — always `<= MAX_CONCEPTS_PER_SWEEP`. */
+  /** Concepts a drafting call was actually made for this sweep — at most `MAX_CONCEPTS_PER_SWEEP` (unbounded during development, [D-653]). */
   readonly attempted: number;
   /** Of those, how many produced a cached draft. */
   readonly drafted: number;

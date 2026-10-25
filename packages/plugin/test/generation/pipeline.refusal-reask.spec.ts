@@ -21,7 +21,6 @@ import type { ConceptRecord, ExtractedUnit, GroundingRefusalReason } from 'olea-
 import { DEFAULT_COURSES_FOLDER, EmbeddingCacheEngine, hashText } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
-import { MAX_CONCEPTS_PER_SWEEP } from '../../src/generation/constants.js';
 import type { GenerationSweepReport } from '../../src/generation/pipeline.js';
 import {
   GenerationRefusalMemory,
@@ -282,7 +281,7 @@ describe('a refused concept no longer takes the per-sweep cap from the concepts 
     expect(h.asked.length).toBe(8);
     expect(reports.reduce((n, r) => n + r.attempted, 0)).toBe(8);
     expect(reports.reduce((n, r) => n + r.refused, 0)).toBe(3);
-    expect(reports.every((r) => r.attempted <= MAX_CONCEPTS_PER_SWEEP)).toBe(true);
+    expect(reports.every((r) => r.attempted <= eight.length)).toBe(true);
   });
 
   it('retryable refusals rotate: concepts after them are reached instead of starved', async () => {
@@ -359,21 +358,21 @@ describe('judge-unavailable follows a bounded retry, not every sweep', () => {
   });
 });
 
-describe('the held refusals stay visible whichever concepts the cap reaches', () => {
-  it('reports every held concept even when other concepts use the whole cap', async () => {
+describe('the held refusals stay visible whichever concepts the sweep reaches', () => {
+  it('reports every held concept alongside the retryable ones the sweep asks again', async () => {
     const names = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel'];
     const rejected = new Set(['Alpha', 'Bravo', 'Charlie']);
     const h = harness(
       names.map((n) => concept(n)),
       (name) => (rejected.has(name) ? refusal('judge-rejected') : refusal('no-hits')),
     );
-    await h.sweep(); // asks Alpha, Bravo, Charlie: all judge-rejected
+    await h.sweep(); // unbounded ([D-653]): asks all eight; Alpha, Bravo, Charlie are judge-rejected
 
-    // Later sweeps: Delta..Hotel are retryable (no-hits) and use the whole cap every time.
+    // Later sweeps: Delta..Hotel are retryable (no-hits) and are all asked again every time.
     const second = await h.sweep();
-    expect(second.attempted).toBe(MAX_CONCEPTS_PER_SWEEP);
+    expect(second.attempted).toBe(5);
     expect(second.skippedRefused).toBe(3);
-    // 3 carried notices + 3 new ones.
+    // 3 carried notices + 5 new ones.
     expect(second.refusals.map((r) => r.conceptName).sort()).toEqual([
       'Alpha',
       'Bravo',
@@ -381,6 +380,8 @@ describe('the held refusals stay visible whichever concepts the cap reaches', ()
       'Delta',
       'Echo',
       'Foxtrot',
+      'Golf',
+      'Hotel',
     ]);
   });
 

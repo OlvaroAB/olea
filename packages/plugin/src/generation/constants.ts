@@ -6,33 +6,23 @@
  */
 
 /**
- * How many NEW concepts one pipeline sweep will draft, at most.
+ * How many NEW concepts one pipeline sweep will draft, at most. Unbounded
+ * (`Number.POSITIVE_INFINITY`) during development and tuning.
  *
- * **Defence.** Each drafted concept costs exactly one grounded `retrieve()`
- * call (local, free) that may or may not clear `[D-042]`'s composite, and — only
- * when it clears — one `quiz.generate.v1` call against the Worker's daily
- * neuron budget (`ol-p2t...`'s cost model §4). A burst of freshly-ingested
- * material (a whole lecture folder dropped at once) can surface dozens of
- * concepts in one sweep; drafting all of them the instant they appear would
- * let one ingestion event spend a large, unpredictable share of the day's
- * generative budget before anything else — a session build, an explain-back
- * grading call — gets a turn. Bounding the sweep converts an unpredictable
- * burst into a small, repeatable unit of work: the next sweep picks up
- * where this one stopped, because an undrafted concept is simply revisited
- * next time (`pipeline.ts`'s dedupe check only skips concepts that already
- * have a cache record). **A sweep runs only when material lands** (an ingested
- * unit batch or a materially changed authored note, both through `main.ts`'s
- * `onUnitsLanded`, which the arrival watch also feeds); the 30-second
- * `INGESTION_TICK_INTERVAL_MS` tick runs no sweep. So a course's concepts
- * beyond this cap wait for that course's next landing, not for the next tick.
- * F3.7 rules out ever *skipping* a concept for being
- * low-priority; this constant only orders *when* it gets its turn, which is
- * exactly what F3.7 asks mastery/yield to decide upstream of this — this
- * pipeline does not do that ordering itself yet (see `pipeline.ts`'s module
- * doc), so a small, conservative cap keeps today's arbitrary source-order
- * bias small in the same way it keeps burst cost small.
+ * **Defence.** David ruled ([D-653]) that there is no per-sweep drafting cap
+ * while the product is being developed and tuned: one sweep attempts every
+ * undrafted concept it reaches, ordered as before (need, then yield, then
+ * rotation), with refusals, duplicates and course scope unchanged. The cost
+ * argument for a bound still stands for a real install: each drafted concept
+ * costs one local grounded `retrieve()` and, only when it clears, one
+ * `quiz.generate.v1` call against the Worker's daily budget, so a burst of
+ * freshly-ingested material could spend a large share of it in one tick. A
+ * pacing bound before install is filed as `ol-egov.141.89.2.49`. The named
+ * constant is kept so a bound returns by changing this one value; the sweep
+ * loops compare `attempted >= MAX_CONCEPTS_PER_SWEEP`, which is never true at
+ * infinity, and nothing does arithmetic on it or serialises it.
  */
-export const MAX_CONCEPTS_PER_SWEEP = 3;
+export const MAX_CONCEPTS_PER_SWEEP = Number.POSITIVE_INFINITY;
 
 /**
  * How many quiz questions the pipeline asks for per concept.

@@ -45,7 +45,6 @@ import {
 import { describe, expect, it } from 'vitest';
 import { createDraftAcceptPort } from '../../src/generation/accept.js';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
-import { MAX_CONCEPTS_PER_SWEEP } from '../../src/generation/constants.js';
 import { HOME_NOTE_MARKER_KEY, homeNotePathForSource } from '../../src/generation/home-note.js';
 import {
   demandRoutingCounterFor,
@@ -353,12 +352,11 @@ describe('runGenerationSweep', () => {
     });
   });
 
-  it('bounds one sweep to MAX_CONCEPTS_PER_SWEEP attempts, leaving the rest for later', async () => {
+  it('attempts every undrafted concept it reaches in one sweep, with no count bound (D-653)', async () => {
     const vault = new MemoryVaultSource();
     const cache = createVaultDraftCacheStore(vault);
-    const many = Array.from({ length: MAX_CONCEPTS_PER_SWEEP + 5 }, (_, i) =>
-      concept(`Concept ${i}`, `key-${i}`),
-    );
+    const COUNT = 25;
+    const many = Array.from({ length: COUNT }, (_, i) => concept(`Concept ${i}`, `key-${i}`));
 
     let calls = 0;
     const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
@@ -372,10 +370,10 @@ describe('runGenerationSweep', () => {
       },
     });
 
-    expect(calls).toBe(MAX_CONCEPTS_PER_SWEEP);
-    expect(report.attempted).toBe(MAX_CONCEPTS_PER_SWEEP);
+    expect(calls).toBe(COUNT);
+    expect(report.attempted).toBe(COUNT);
     const pending = await cache.listPending();
-    expect(pending).toHaveLength(MAX_CONCEPTS_PER_SWEEP);
+    expect(pending).toHaveLength(COUNT);
   });
 
   it('a refused concept caches nothing, and is therefore eligible to be retried next sweep', async () => {

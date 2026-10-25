@@ -1,5 +1,5 @@
 /**
- * `[D-368]` / F3.7 (`ol-egov.141.89.105.21`): the sweep spends its per-sweep cap in the drain-order
+ * `[D-368]` / F3.7 (`ol-egov.141.89.105.21`): the sweep orders its attempts (all of them, unbounded during development, [D-653]) in the drain-order
  * key's order (current need, then expected yield, the rotation as the tie-break) when a reading is
  * composed, and in exactly today's order when it is not. Scenarios: `features/F3-learn-from-anything.md`,
  * "the sweep asks a course's concepts in the drain-order key's order". Every fixture is invented.
@@ -77,10 +77,10 @@ async function sweepOnce(
 
 describe('[D-368] the sweep orders its first calls by the drain-order key (ol-egov.141.89.105.21)', () => {
   it('without a reading the order is the name order, as before', async () => {
-    expect(await sweepOnce(null)).toEqual(['Alpha', 'Beta', 'Delta']);
+    expect(await sweepOnce(null)).toEqual(['Alpha', 'Beta', 'Delta', 'Epsilon', 'Gamma']);
   });
 
-  it('a higher-need concept is drafted before an alphabetically earlier one under the cap', async () => {
+  it('a higher-need concept is drafted before an alphabetically earlier one', async () => {
     const asks = await sweepOnce({
       Alpha: { need: 0.1, expectedYield: 3 },
       Beta: { need: 0.2, expectedYield: 3 },
@@ -88,7 +88,7 @@ describe('[D-368] the sweep orders its first calls by the drain-order key (ol-eg
       Delta: { need: 0.1, expectedYield: 3 },
       Epsilon: { need: 0.5, expectedYield: 3 },
     });
-    expect(asks).toEqual(['Gamma', 'Epsilon', 'Beta']);
+    expect(asks).toEqual(['Gamma', 'Epsilon', 'Beta', 'Alpha', 'Delta']);
   });
 
   it('equal need falls to the higher expected yield, and a full tie keeps the rotation', async () => {
@@ -99,7 +99,7 @@ describe('[D-368] the sweep orders its first calls by the drain-order key (ol-eg
       Delta: { need: 0.5, expectedYield: 3 },
       Epsilon: { need: 0.5, expectedYield: 3 },
     });
-    expect(asks).toEqual(['Gamma', 'Alpha', 'Beta']);
+    expect(asks).toEqual(['Gamma', 'Alpha', 'Beta', 'Delta', 'Epsilon']);
   });
 
   it('a reading missing for any candidate leaves the rotation untouched', async () => {
@@ -107,10 +107,10 @@ describe('[D-368] the sweep orders its first calls by the drain-order key (ol-eg
       Object.fromEntries(NAMES.map((n) => [n, { need: n === 'Gamma' ? 1 : 0, expectedYield: 3 }])),
       'Epsilon',
     );
-    expect(asks).toEqual(['Alpha', 'Beta', 'Delta']);
+    expect(asks).toEqual(['Alpha', 'Beta', 'Delta', 'Epsilon', 'Gamma']);
   });
 
-  it('no concept is skipped: the ones the cap did not reach are asked on the next sweep', async () => {
+  it('no concept is skipped: one sweep attempts all of them in key order ([D-653]), and the next asks none again', async () => {
     const vault = new MemoryVaultSource({
       ...SYNTHETIC_INPUT_FILES,
       [NOTE]: '---\ncourse: COURSE-A\n---\n\nSome prose.\n',
@@ -131,9 +131,9 @@ describe('[D-368] the sweep orders its first calls by the drain-order key (ol-eg
         drainOrderFor: (p) => ({ need: need[p.conceptName] ?? 0, expectedYield: 3 }),
       });
     await run();
-    expect(asks).toEqual(['Epsilon', 'Gamma', 'Alpha']);
+    expect(asks).toEqual(['Epsilon', 'Gamma', 'Alpha', 'Beta', 'Delta']);
     asks.length = 0;
     await run();
-    expect(asks).toEqual(['Beta', 'Delta']);
+    expect(asks).toEqual([]);
   });
 });
