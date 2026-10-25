@@ -3357,6 +3357,13 @@ export default class OleaPlugin extends Plugin {
       );
       if (pass === null) return;
       this.relations = pass.relations;
+      // `ol-egov.141.89.3.61`: a corpus stage that did not fully answer no longer discards the
+      // read; say so once, with counts and a code only.
+      if (pass.corpus.failure !== undefined) {
+        console.warn(
+          `Olea: corpus relation stage ${pass.corpus.completion ?? 'failed'} (${pass.corpus.policy ?? 'unversioned'}): ${JSON.stringify(pass.corpus.failure)}`,
+        );
+      }
 
       // `ol-2zfj.49` (second half): fold this tick's already-completed read
       // (`pass.read.concepts`) onto a fresh, purely-local vault walk's

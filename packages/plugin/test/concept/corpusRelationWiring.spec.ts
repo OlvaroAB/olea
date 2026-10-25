@@ -43,6 +43,7 @@ import type {
 import {
   buildConceptWiring,
   buildCorpusRelationWiring,
+  CORPUS_RELATION_BATCH_POLICY_VERSION,
   corpusConceptsFrom,
   readConceptsAndRelations,
   readConceptsFromVault,
@@ -1457,5 +1458,120 @@ describe('the production corpus-relations batch, over the fixture vault (`ol-282
     const resolved = resolveRelatedConceptKeys(corpusEdges, []);
     expect(resolved.unresolvedEndpointCount).toBe(0);
     expect(resolved.relatedConceptKeys.size).toBeGreaterThan(0);
+  });
+});
+
+// ---- a failed corpus request keeps the read's relations (ol-egov.141.89.3.61) ----------------
+//
+// Scenario ids (filed against F8.1 / C7.10 by the hub; the tests below carry them in their titles):
+//   S-REL-KEEP-1  a refused corpus request keeps the extraction-stage relations and reports `failed`
+//   S-REL-KEEP-2  an unreachable transport does the same
+//   S-REL-KEEP-3  a failed stage leaves the known-concept set alone, so the next boundary retries
+//   S-REL-KEEP-4  a verdict naming a concept the read never minted is dropped and mints nothing
+//   S-REL-KEEP-5  every ran outcome names the policy version that produced it
+// Fixtures are coined for this file (INV-3).
+
+function twoStageTransportWithCorpusReply(corpusReply: (request: WorkerTaskRequest) => unknown) {
+  const inner = twoStageTransport();
+  return {
+    calls: inner.calls,
+    send: async (request: WorkerTaskRequest) => {
+      if (request.taskId === 'concepts.relations.v1') {
+        inner.calls.push(request);
+        return corpusReply(request);
+      }
+      return inner.send(request);
+    },
+  };
+}
+
+async function passOver(transport: {
+  calls: WorkerTaskRequest[];
+  send: (request: WorkerTaskRequest) => Promise<unknown>;
+}) {
+  const conceptWiring = await buildConceptWiring({
+    dataHost: configuredHost(READY_CONFIG),
+    createTransport: () => transport,
+  });
+  const corpusWiring = await buildCorpusRelationWiring({
+    dataHost: configuredHost(READY_CONFIG),
+    createTransport: () => transport,
+  });
+  const stateHost = new FakeDataHost();
+  const pass = await readConceptsAndRelations(
+    conceptWiring,
+    corpusWiring,
+    new ObsidianCorpusRelationStateStore(stateHost),
+    { vault: new MemoryVault(TWO_CONCEPT_VAULT), ingestionSessionClosed: true },
+  );
+  return { pass, stateStore: new ObsidianCorpusRelationStateStore(stateHost) };
+}
+
+describe('readConceptsAndRelations — a failed corpus request keeps the read (ol-egov.141.89.3.61)', () => {
+  it('S-REL-KEEP-1: a refused corpus request keeps the extraction-stage relations and reports a failed stage', async () => {
+    const { pass } = await passOver(
+      twoStageTransportWithCorpusReply(() => ({
+        ok: false,
+        code: 'upstream-unavailable',
+        message: 'Bud and Scale were mentioned here',
+      })),
+    );
+
+    expect(pass).not.toBeNull();
+    expect(pass?.read.concepts.map((concept) => concept.name).sort()).toEqual(['Bud', 'Scale']);
+    expect((pass?.relations.entries ?? []).map((entry) => entry.edge.type)).toEqual(['is-a']);
+    expect(pass?.corpus).toMatchObject({
+      ran: true,
+      completion: 'failed',
+      policy: CORPUS_RELATION_BATCH_POLICY_VERSION,
+      failure: { reason: 'upstream-unavailable' },
+      relations: [],
+    });
+    // The Worker's message can echo content: only the code travels into the record.
+    expect(JSON.stringify(pass?.corpus)).not.toContain('mentioned');
+  });
+
+  it('S-REL-KEEP-2: an unreachable transport does the same', async () => {
+    const { pass } = await passOver(
+      twoStageTransportWithCorpusReply(() => {
+        throw new Error('network down');
+      }),
+    );
+
+    expect((pass?.relations.entries ?? []).map((entry) => entry.edge.type)).toEqual(['is-a']);
+    expect(pass?.corpus.completion).toBe('failed');
+    expect(pass?.corpus.failure?.reason).toBe('WorkerCorpusRelationVerdictError');
+  });
+
+  it('S-REL-KEEP-3: a failed stage leaves the known-concept set alone, so the next boundary tries these concepts again', async () => {
+    const { stateStore } = await passOver(
+      twoStageTransportWithCorpusReply(() => ({ ok: false, code: 'upstream-unavailable' })),
+    );
+    expect((await stateStore.load()).knownConceptNames).toEqual([]);
+  });
+
+  it('S-REL-KEEP-4: a verdict naming a concept the read never minted is dropped, mints nothing, and keeps the rest', async () => {
+    const { pass } = await passOver(
+      twoStageTransportWithCorpusReply(() => ({
+        ok: true,
+        result: { verdicts: [{ a: 'Bud', b: 'Ghost', type: 'contrasts-with', confidence: 0.9 }] },
+      })),
+    );
+
+    expect(pass?.read.concepts.map((concept) => concept.name).sort()).toEqual(['Bud', 'Scale']);
+    expect(pass?.corpus.completion).toBe('complete');
+    expect(pass?.corpus.relations).toEqual([]);
+    expect((pass?.relations.entries ?? []).map((entry) => entry.edge.type)).toEqual(['is-a']);
+  });
+
+  it('S-REL-KEEP-5: a stage that ran and fully answered names the policy version and carries no failure', async () => {
+    const { pass, stateStore } = await passOver(twoStageTransport());
+    expect(pass?.corpus).toMatchObject({
+      ran: true,
+      completion: 'complete',
+      policy: CORPUS_RELATION_BATCH_POLICY_VERSION,
+    });
+    expect(pass?.corpus.failure).toBeUndefined();
+    expect([...(await stateStore.load()).knownConceptNames].sort()).toEqual(['Bud', 'Scale']);
   });
 });

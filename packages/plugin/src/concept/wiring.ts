@@ -738,8 +738,47 @@ async function buildEndpointRevisionStamping(input: {
   };
 }
 
+/**
+ * The identifiable version of how the corpus stage treats a failure (`ol-egov.141.89.3.61`).
+ * Stamped on every outcome where the stage ran, so a record of a read says which behaviour
+ * produced it. `corpus-relation-batch.v1` is the behaviour before this constant existed (it never
+ * appears on a record): a failed corpus request threw out of `readConceptsAndRelations` and the
+ * whole read's relations, the per-document ones included, were lost.
+ * `corpus-relation-batch.v2` keeps the read's per-document relations when the corpus request fails
+ * and reports the failure as a typed partial outcome.
+ */
+export const CORPUS_RELATION_BATCH_POLICY_VERSION = 'corpus-relation-batch.v2';
+
+/** How a corpus stage that ran ended: every request answered, some answered, or none. */
+export type CorpusRelationStageCompletion = 'complete' | 'partial' | 'failed';
+
+/** The typed record of a corpus stage that did not fully answer. Counts and a code only (D-005). */
+export interface CorpusRelationStageFailure {
+  /** The Worker's refusal code when it gave one, else the error's class name. Never a message. */
+  readonly reason: string;
+  /** Request batches the stage sent, when the port reported them. */
+  readonly batchesSent?: number;
+  /** Request batches that got no answer, when the port reported them. */
+  readonly batchesFailed?: number;
+  /** Candidate pairs nominated and sent that got no verdict, when known. */
+  readonly candidatesUnanswered?: number;
+}
+
+function failureReasonOf(error: unknown): string {
+  if (error instanceof Error) {
+    const code = (error as { code?: unknown }).code;
+    return typeof code === 'string' && code.length > 0 ? code : error.name;
+  }
+  return 'unknown';
+}
+
 export interface CorpusRelationBatchRunOutcome {
   readonly ran: boolean;
+  /** Present only when `ran` is true: `CORPUS_RELATION_BATCH_POLICY_VERSION`. */
+  readonly policy?: string;
+  /** Present only when `ran` is true. `partial` and `failed` carry `failure`; their `relations` hold what did answer (none, for `failed`). */
+  readonly completion?: CorpusRelationStageCompletion;
+  readonly failure?: CorpusRelationStageFailure;
   /** Present only when `ran` is true — which boundary fired. */
   readonly reason?: CorpusRelationBatchTriggerReason;
   /** Present only when `ran` is true. Folded onto the per-document read's own `relations` by `readConceptsAndRelations` below (`ol-2zfj.12`) — same `ConceptRelation[]` shape, one `RelationSet`. */
@@ -827,21 +866,56 @@ export async function runCorpusRelationBatchIfDue(
       ? undefined
       : await buildEndpointRevisionStamping(options.endpointRevisionStamping);
 
-  const result = await runCorpusRelationBatch(wiring.verdictPort, {
-    newConcepts,
-    allConcepts: options.allConcepts,
-    signals,
-    passageText: (concept) => passageTextByName.get(concept.name) ?? '',
-    ...(endpointRevisionStamping !== undefined ? { endpointRevisionStamping } : {}),
-  });
+  let result: Awaited<ReturnType<typeof runCorpusRelationBatch>>;
+  try {
+    result = await runCorpusRelationBatch(wiring.verdictPort, {
+      newConcepts,
+      allConcepts: options.allConcepts,
+      signals,
+      passageText: (concept) => passageTextByName.get(concept.name) ?? '',
+      ...(endpointRevisionStamping !== undefined ? { endpointRevisionStamping } : {}),
+    });
+  } catch (error) {
+    // `ol-egov.141.89.3.61`: a corpus request that fails or goes unanswered is this stage's
+    // failure, not the read's. It used to leave here as a throw and `main.ts` discarded the whole
+    // read, including the per-document relations the extraction already returned. Now the stage
+    // reports `failed` with no relations of its own, and the known-concept set is left as it was,
+    // so the next boundary nominates these concepts again.
+    return {
+      ran: true,
+      ...(trigger.reason !== undefined ? { reason: trigger.reason } : {}),
+      policy: CORPUS_RELATION_BATCH_POLICY_VERSION,
+      completion: 'failed',
+      failure: { reason: failureReasonOf(error) },
+      relations: [],
+    };
+  }
 
-  await stateStore.save({
-    knownConceptNames: [...new Set(options.allConcepts.map((concept) => concept.name))],
-  });
+  const unanswered = result.verdictBatches;
+  const partial = unanswered !== undefined && unanswered.failed > 0;
+  // A partial stage also leaves the known-concept set alone: the pairs in its failed batches must
+  // be nominated again, and the pairs that did answer are already cached by the caller.
+  if (!partial) {
+    await stateStore.save({
+      knownConceptNames: [...new Set(options.allConcepts.map((concept) => concept.name))],
+    });
+  }
 
   return {
     ran: true,
     ...(trigger.reason !== undefined ? { reason: trigger.reason } : {}),
+    policy: CORPUS_RELATION_BATCH_POLICY_VERSION,
+    completion: partial ? 'partial' : 'complete',
+    ...(partial
+      ? {
+          failure: {
+            reason: 'batch-unanswered',
+            batchesSent: unanswered.sent,
+            batchesFailed: unanswered.failed,
+            candidatesUnanswered: unanswered.candidatesUnanswered,
+          },
+        }
+      : {}),
     relations: result.relations,
     candidatesNominated: result.candidatesNominated,
   };
