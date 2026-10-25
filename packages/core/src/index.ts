@@ -220,6 +220,7 @@ export {
 export type {
   CorpusRelationVerdictPort,
   CorpusVerdict,
+  CorpusVerdictBatchFailure,
   CorpusVerdictRequest,
   CorpusVerdictRequestCandidate,
   CorpusVerdictResponse,

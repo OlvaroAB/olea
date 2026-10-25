@@ -376,3 +376,38 @@ describe('runCorpusRelationBatch — causes (ol-egov.141.89.4.23)', () => {
     });
   });
 });
+
+describe('runCorpusRelationBatch — request batches a port reports (ol-egov.141.89.3.61)', () => {
+  it('carries the port-reported batch counts onto the result, counts only', async () => {
+    const port: CorpusRelationVerdictPort = {
+      verdict: vi.fn().mockResolvedValue({
+        verdicts: [],
+        batchesSent: 4,
+        failedBatches: [
+          { candidates: 3, reason: 'upstream-unavailable' },
+          { candidates: 2, reason: 'WorkerCorpusRelationVerdictError' },
+        ],
+      }),
+    };
+    const result = await runCorpusRelationBatch(port, {
+      newConcepts: [concept('Osmosis')],
+      allConcepts: [concept('Osmosis'), concept('Membrane transport', 'Lecture 2.md')],
+      signals: [{ kind: 'embedding-proximity', a: 'Osmosis', b: 'Membrane transport' }],
+      passageText: () => 'some passage text',
+    });
+    expect(result.verdictBatches).toEqual({ sent: 4, failed: 2, candidatesUnanswered: 5 });
+  });
+
+  it('reports nothing about batches for a port that does not split', async () => {
+    const port: CorpusRelationVerdictPort = {
+      verdict: vi.fn().mockResolvedValue({ verdicts: [] }),
+    };
+    const result = await runCorpusRelationBatch(port, {
+      newConcepts: [concept('Osmosis')],
+      allConcepts: [concept('Osmosis'), concept('Membrane transport', 'Lecture 2.md')],
+      signals: [{ kind: 'embedding-proximity', a: 'Osmosis', b: 'Membrane transport' }],
+      passageText: () => 'some passage text',
+    });
+    expect(result.verdictBatches).toBeUndefined();
+  });
+});

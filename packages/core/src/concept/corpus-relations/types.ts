@@ -293,6 +293,16 @@ export interface CorpusRelationBatchResult {
    * it is simply reconsidered next run rather than this one.
    */
   readonly candidatesCappedOut: number;
+  /**
+   * `ol-egov.141.89.3.61`: how the verdict call went when the port split it into request batches.
+   * Absent when the port did not report (an unsplit call). Counts only (D-005).
+   */
+  readonly verdictBatches?: {
+    readonly sent: number;
+    readonly failed: number;
+    /** Candidate pairs in the failed batches: nominated, sent, never answered. */
+    readonly candidatesUnanswered: number;
+  };
 }
 
 /**
