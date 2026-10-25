@@ -76,6 +76,7 @@
 import type {
   CorpusRelationVerdictPort,
   CorpusVerdict,
+  CorpusVerdictBatchFailure,
   CorpusVerdictRequest,
   CorpusVerdictResponse,
   RelationType,
@@ -125,10 +126,111 @@ export class WorkerCorpusRelationVerdictError extends Error {
   }
 }
 
+/**
+ * The declared ceiling on one `concepts.relations.v1` request payload, in UTF-8 bytes of the
+ * serialized `{ endpoints, candidates }` body (`ol-egov.141.89.3.61`). A DECLARED number, never
+ * fitted: the only input limit the service states is `MAX_INPUT_TOKENS = 64_000`
+ * (`olea-service/src/ai/jevClient.ts`, the System One client; `src/tasks/conceptsRelations.ts`
+ * validates no size and the Worker imposes none on this task). Taking that limit as the working
+ * ceiling for any one model call: 64,000 tokens less about 2,000 for the system prompt leaves
+ * 62,000; at a conservative 3 bytes per token (prose runs nearer 4; markup, maths and non-Latin
+ * text nearer 3) that is 186,000 bytes, and a request is held to about 70% of it. A single pair
+ * is at most two passages of `RELATIONS_ENDPOINT_CHAR_BUDGET` (8,000) characters, 64,000 bytes at
+ * the 4-bytes-per-character worst case, so one pair always fits. Revisit when the pinned model's
+ * input limit changes or the service starts to validate request size.
+ */
+export const CORPUS_RELATION_REQUEST_CEILING_BYTES = 128_000;
+
+const utf8 = new TextEncoder();
+
+function jsonBytes(value: unknown): number {
+  return utf8.encode(JSON.stringify(value)).length;
+}
+
+type VerdictCandidate = CorpusVerdictRequest['candidates'][number];
+
+/**
+ * Splits a call's candidate pairs into request batches whose serialized payload stays under
+ * `ceilingBytes`, each pair whole (its two endpoints always travel together). Pairs are grouped
+ * by the documents their endpoints came from (first endpoint's document, then the second's), so a
+ * document's concepts fall in the same batch where the ceiling allows and each endpoint's passage
+ * is sent once per batch rather than once per pair. Deterministic: ties keep the nominated order.
+ * An empty input gives no batches; a pair larger than the ceiling travels alone.
+ */
+export function planCorpusRelationBatches(
+  candidates: readonly VerdictCandidate[],
+  frontmatterHost: SourceOriginFrontmatterHost | undefined,
+  ceilingBytes: number = CORPUS_RELATION_REQUEST_CEILING_BYTES,
+): VerdictCandidate[][] {
+  const ordered = candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .sort(
+      (x, y) =>
+        compareText(x.candidate.a.anchor.sourcePath, y.candidate.a.anchor.sourcePath) ||
+        compareText(x.candidate.b.anchor.sourcePath, y.candidate.b.anchor.sourcePath) ||
+        x.index - y.index,
+    )
+    .map(({ candidate }) => candidate);
+
+  const emptyBytes = jsonBytes({ endpoints: {}, candidates: [] });
+  /** Bytes a pair adds to a batch that already holds the endpoints named in `present`. */
+  const costOf = (candidate: VerdictCandidate, present: ReadonlySet<string>): number => {
+    const fresh = [candidate.a, candidate.b].filter(
+      (endpoint, i, all) =>
+        !present.has(endpoint.name) && all.findIndex((e) => e.name === endpoint.name) === i,
+    );
+    return (
+      fresh.reduce(
+        (sum, endpoint) =>
+          sum + jsonBytes(toWireEndpoint(endpoint, frontmatterHost)) + jsonBytes(endpoint.name) + 1,
+        0,
+      ) +
+      jsonBytes({ a: candidate.a.name, b: candidate.b.name }) +
+      1
+    );
+  };
+
+  const batches: VerdictCandidate[][] = [];
+  let current: VerdictCandidate[] = [];
+  let present = new Set<string>();
+  let bytes = emptyBytes;
+  for (const candidate of ordered) {
+    let cost = costOf(candidate, present);
+    if (current.length > 0 && bytes + cost > ceilingBytes) {
+      batches.push(current);
+      current = [];
+      present = new Set();
+      bytes = emptyBytes;
+      cost = costOf(candidate, present);
+    }
+    bytes += cost;
+    current.push(candidate);
+    present.add(candidate.a.name);
+    present.add(candidate.b.name);
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+function compareText(x: string, y: string): number {
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/** The serialized size of the payload one batch would send, for measurement and tests. */
+export function corpusRelationPayloadBytes(
+  candidates: readonly VerdictCandidate[],
+  frontmatterHost?: SourceOriginFrontmatterHost,
+): number {
+  const { endpoints, candidates: wire } = buildDictionaryPayload(candidates, frontmatterHost);
+  return jsonBytes({ endpoints, candidates: wire });
+}
+
 export interface WorkerCorpusRelationVerdictDeps {
   readonly transport: WorkerTaskTransport;
   /** `ol-egov.141.89.8.56`: lets a `.md` that declares a transcript role be recognised. Optional. */
   readonly frontmatterHost?: SourceOriginFrontmatterHost;
+  /** Overrides `CORPUS_RELATION_REQUEST_CEILING_BYTES`; tests only. */
+  readonly requestCeilingBytes?: number;
 }
 
 interface WireEndpoint {
@@ -217,12 +319,20 @@ function buildDictionaryPayload(
 export class WorkerCorpusRelationVerdict implements CorpusRelationVerdictPort {
   private readonly transport: WorkerTaskTransport;
   private readonly frontmatterHost: SourceOriginFrontmatterHost | undefined;
+  private readonly ceilingBytes: number;
 
   constructor(deps: WorkerCorpusRelationVerdictDeps) {
     this.transport = deps.transport;
     this.frontmatterHost = deps.frontmatterHost;
+    this.ceilingBytes = deps.requestCeilingBytes ?? CORPUS_RELATION_REQUEST_CEILING_BYTES;
   }
 
+  /**
+   * `ol-egov.141.89.3.61`: the call is split into request batches under the declared ceiling
+   * (`planCorpusRelationBatches`), sent one after another, each failing on its own. A batch that
+   * fails is recorded in `failedBatches` and the others' verdicts are kept. When EVERY batch
+   * fails (always the case for a one-batch call) the first error is thrown, as before.
+   */
   async verdict(request: CorpusVerdictRequest): Promise<CorpusVerdictResponse> {
     // Mirrors `WorkerConceptReader.read`'s own INV-5 refusal-by-construction:
     // `runCorpusRelationBatch` never calls a port with an empty batch, but
@@ -231,8 +341,43 @@ export class WorkerCorpusRelationVerdict implements CorpusRelationVerdictPort {
       return { verdicts: [] };
     }
 
-    const { endpoints, candidates: wireCandidates } = buildDictionaryPayload(
+    const batches = planCorpusRelationBatches(
       request.candidates,
+      this.frontmatterHost,
+      this.ceilingBytes,
+    );
+    const verdicts: CorpusVerdict[] = [];
+    const failedBatches: CorpusVerdictBatchFailure[] = [];
+    let firstError: WorkerCorpusRelationVerdictError | undefined;
+    for (const batch of batches) {
+      try {
+        verdicts.push(...(await this.sendBatch(batch)));
+      } catch (error) {
+        const wrapped =
+          error instanceof WorkerCorpusRelationVerdictError
+            ? error
+            : new WorkerCorpusRelationVerdictError(
+                `WorkerCorpusRelationVerdict: a batch failed: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+        firstError ??= wrapped;
+        failedBatches.push({ candidates: batch.length, reason: wrapped.code ?? wrapped.name });
+      }
+    }
+    if (failedBatches.length === batches.length && firstError !== undefined) throw firstError;
+    return {
+      verdicts,
+      batchesSent: batches.length,
+      ...(failedBatches.length > 0 ? { failedBatches } : {}),
+    };
+  }
+
+  private async sendBatch(
+    candidates: readonly VerdictCandidate[],
+  ): Promise<readonly CorpusVerdict[]> {
+    const { endpoints, candidates: wireCandidates } = buildDictionaryPayload(
+      candidates,
       this.frontmatterHost,
     );
 
@@ -252,7 +397,7 @@ export class WorkerCorpusRelationVerdict implements CorpusRelationVerdictPort {
     }
 
     const response = readResponseBody(body);
-    return { verdicts: readVerdicts(response) };
+    return readVerdicts(response);
   }
 }
 

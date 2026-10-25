@@ -746,8 +746,11 @@ async function buildEndpointRevisionStamping(input: {
  * whole read's relations, the per-document ones included, were lost.
  * `corpus-relation-batch.v2` keeps the read's per-document relations when the corpus request fails
  * and reports the failure as a typed partial outcome.
+ * `corpus-relation-batch.v3` also splits the request into batches under
+ * `CORPUS_RELATION_REQUEST_CEILING_BYTES` (`./workerCorpusRelationVerdict.ts`), each failing alone;
+ * a stage where some batches answered and some did not is `partial` and keeps the answered ones.
  */
-export const CORPUS_RELATION_BATCH_POLICY_VERSION = 'corpus-relation-batch.v2';
+export const CORPUS_RELATION_BATCH_POLICY_VERSION = 'corpus-relation-batch.v3';
 
 /** How a corpus stage that ran ended: every request answered, some answered, or none. */
 export type CorpusRelationStageCompletion = 'complete' | 'partial' | 'failed';

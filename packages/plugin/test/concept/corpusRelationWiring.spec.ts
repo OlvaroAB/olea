@@ -1575,3 +1575,39 @@ describe('readConceptsAndRelations — a failed corpus request keeps the read (o
     expect([...(await stateStore.load()).knownConceptNames].sort()).toEqual(['Bud', 'Scale']);
   });
 });
+
+describe('runCorpusRelationBatchIfDue — a partly answered stage (ol-egov.141.89.3.61)', () => {
+  it("S-REL-BATCH-6: a stage where one batch failed keeps the answered batches' relations, reports partial with counts, and retries next boundary", async () => {
+    const stateHost = new FakeDataHost();
+    const stateStore = new ObsidianCorpusRelationStateStore(stateHost);
+    const port = {
+      verdict: async () => ({
+        verdicts: [{ a: 'Bud', b: 'Scale', type: 'contrasts-with' as const, confidence: 0.9 }],
+        batchesSent: 3,
+        failedBatches: [{ candidates: 7, reason: 'upstream-unavailable' }],
+      }),
+    };
+    const vault = new MemoryVault(TWO_CONCEPT_VAULT);
+    const concepts = [
+      readConcept('Bud', '01 Courses/CourseA/Concepts.md', ['CourseA']),
+      readConcept('Scale', '01 Courses/CourseA/Concepts.md', ['CourseA']),
+    ];
+
+    const outcome = await runCorpusRelationBatchIfDue({ verdictPort: port }, stateStore, {
+      vault,
+      ingestionSessionClosed: true,
+      allConcepts: corpusConceptsFrom(concepts),
+    });
+
+    expect(outcome.completion).toBe('partial');
+    expect(outcome.policy).toBe(CORPUS_RELATION_BATCH_POLICY_VERSION);
+    expect(outcome.failure).toEqual({
+      reason: 'batch-unanswered',
+      batchesSent: 3,
+      batchesFailed: 1,
+      candidatesUnanswered: 7,
+    });
+    expect(outcome.relations?.map((relation) => relation.type)).toEqual(['contrasts-with']);
+    expect((await stateStore.load()).knownConceptNames).toEqual([]);
+  });
+});

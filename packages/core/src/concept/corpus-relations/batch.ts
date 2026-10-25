@@ -158,6 +158,18 @@ export async function runCorpusRelationBatch(
     dropped: fullDropped,
     candidatesNominated: nominated.length,
     candidatesCappedOut,
+    ...(response.batchesSent !== undefined
+      ? {
+          verdictBatches: {
+            sent: response.batchesSent,
+            failed: response.failedBatches?.length ?? 0,
+            candidatesUnanswered: (response.failedBatches ?? []).reduce(
+              (sum, failure) => sum + failure.candidates,
+              0,
+            ),
+          },
+        }
+      : {}),
   };
 }
 

@@ -12,6 +12,9 @@ import { describe, expect, it } from 'vitest';
 import {
   CONCEPTS_RELATIONS_CONTRACT_VERSION,
   CONCEPTS_RELATIONS_TASK_ID,
+  CORPUS_RELATION_REQUEST_CEILING_BYTES,
+  corpusRelationPayloadBytes,
+  planCorpusRelationBatches,
   WorkerCorpusRelationVerdict,
   WorkerCorpusRelationVerdictError,
 } from '../../src/concept/workerCorpusRelationVerdict.js';
@@ -485,5 +488,137 @@ describe('WorkerCorpusRelationVerdict — refuses rather than mis-parses a confa
     });
 
     await expect(port.verdict(request)).rejects.toThrow(WorkerCorpusRelationVerdictError);
+  });
+});
+
+// ---- the request is split under a declared ceiling (ol-egov.141.89.3.61) -----------------------
+//
+// Scenario ids (filed against F8.1 / C7.10 by the hub; carried in the titles below):
+//   S-REL-BATCH-1  batches respect the ceiling and every nominated pair travels exactly once
+//   S-REL-BATCH-2  one failed batch leaves the other batches' verdicts, and is reported
+//   S-REL-BATCH-3  every batch failing throws, as a single failed request always did
+//   S-REL-BATCH-4  a document's concepts stay in one batch where the ceiling allows
+//   S-REL-BATCH-5  a call under the ceiling is one request, unchanged
+// Fixtures are coined for this file (INV-3).
+
+function syntheticEndpoint(name: string, doc: string, chars: number): Endpoint {
+  return {
+    name,
+    aliases: [],
+    anchor: { sourcePath: `Courses/Synthetic/${doc}.md`, location: { page: 1 } },
+    passageText: 'x'.repeat(chars),
+  };
+}
+
+/** Three documents of four concepts each; every concept pairs with the next two in its own document and one other. */
+function syntheticCandidates(chars: number): CorpusVerdictRequest['candidates'] {
+  const docs = ['alpha', 'beta', 'gamma'];
+  const endpoints = docs.flatMap((doc) =>
+    [1, 2, 3, 4].map((n) => syntheticEndpoint(`${doc} concept ${n}`, doc, chars)),
+  );
+  const pairs: CorpusVerdictRequest['candidates'][number][] = [];
+  for (let d = 0; d < 3; d++) {
+    for (let i = 0; i < 4; i++) {
+      for (let j = i + 1; j < 4; j++)
+        pairs.push({ a: endpoints[d * 4 + i]!, b: endpoints[d * 4 + j]! });
+    }
+  }
+  pairs.push({ a: endpoints[0]!, b: endpoints[4]! }, { a: endpoints[5]!, b: endpoints[9]! });
+  return pairs;
+}
+
+describe('WorkerCorpusRelationVerdict — request batching under a declared ceiling (ol-egov.141.89.3.61)', () => {
+  it('declares a ceiling that one maximal pair fits under', () => {
+    const maximalPair = [
+      { a: syntheticEndpoint('a', 'x', 8000), b: syntheticEndpoint('b', 'y', 8000) },
+    ];
+    expect(corpusRelationPayloadBytes(maximalPair)).toBeLessThan(
+      CORPUS_RELATION_REQUEST_CEILING_BYTES,
+    );
+  });
+
+  it('S-REL-BATCH-1: batches respect the ceiling and every nominated pair travels exactly once', async () => {
+    const candidates = syntheticCandidates(3000);
+    const ceiling = 30_000;
+    const transport = new RecordingTransport(() => okResponse({ verdicts: [] }));
+    const port = new WorkerCorpusRelationVerdict({ transport, requestCeilingBytes: ceiling });
+
+    const response = await port.verdict({ candidates });
+
+    expect(transport.sent.length).toBeGreaterThan(1);
+    expect(response.batchesSent).toBe(transport.sent.length);
+    const sentPairs: string[] = [];
+    for (const sent of transport.sent) {
+      const payload = sent.payload as { candidates: { a: string; b: string }[] };
+      expect(new TextEncoder().encode(JSON.stringify(sent.payload)).length).toBeLessThanOrEqual(
+        ceiling,
+      );
+      sentPairs.push(...payload.candidates.map((pair) => `${pair.a}|${pair.b}`));
+    }
+    expect(sentPairs.sort()).toEqual(
+      candidates.map((pair) => `${pair.a.name}|${pair.b.name}`).sort(),
+    );
+  });
+
+  it("S-REL-BATCH-2: one failed batch leaves the other batches' verdicts and is reported by count and code", async () => {
+    const candidates = syntheticCandidates(3000);
+    let call = 0;
+    const transport = new RecordingTransport((sent) => {
+      call += 1;
+      if (call === 2) return { ok: false, code: 'upstream-unavailable', message: 'secret text' };
+      const first = (sent.payload as { candidates: { a: string; b: string }[] }).candidates[0]!;
+      return okResponse({
+        verdicts: [{ a: first.a, b: first.b, type: 'contrasts-with', confidence: 0.8 }],
+      });
+    });
+    const port = new WorkerCorpusRelationVerdict({ transport, requestCeilingBytes: 30_000 });
+
+    const response = await port.verdict({ candidates });
+
+    expect(response.verdicts).toHaveLength(transport.sent.length - 1);
+    expect(response.failedBatches).toHaveLength(1);
+    expect(response.failedBatches?.[0]?.reason).toBe('upstream-unavailable');
+    expect(response.failedBatches?.[0]?.candidates).toBeGreaterThan(0);
+    expect(JSON.stringify(response.failedBatches)).not.toContain('secret');
+  });
+
+  it('S-REL-BATCH-3: every batch failing throws, as a single failed request always did', async () => {
+    const transport = new RecordingTransport(() => ({ ok: false, code: 'upstream-unavailable' }));
+    const port = new WorkerCorpusRelationVerdict({ transport, requestCeilingBytes: 30_000 });
+    await expect(port.verdict({ candidates: syntheticCandidates(3000) })).rejects.toBeInstanceOf(
+      WorkerCorpusRelationVerdictError,
+    );
+    expect(transport.sent.length).toBeGreaterThan(1);
+  });
+
+  it("S-REL-BATCH-4: a document's concepts stay in one batch where the ceiling allows", () => {
+    const candidates = syntheticCandidates(3000);
+    // Room for one document\'s six pairs and four passages, not for two documents.
+    const batches = planCorpusRelationBatches(candidates, undefined, 50_000);
+    const batchOf = (name: string) =>
+      batches.findIndex((batch) =>
+        batch.some((pair) => pair.a.name === name || pair.b.name === name),
+      );
+    for (const doc of ['alpha', 'beta', 'gamma']) {
+      const homes = new Set(
+        [1, 2, 3, 4].map((n) =>
+          batches.findIndex((batch) =>
+            batch.some((p) => p.a.name === `${doc} concept ${n}` && p.b.name.startsWith(doc)),
+          ),
+        ),
+      );
+      homes.delete(-1);
+      expect(homes.size).toBe(1);
+    }
+    expect(batchOf('alpha concept 1')).toBeGreaterThanOrEqual(0);
+  });
+
+  it('S-REL-BATCH-5: a call under the ceiling is one request carrying every pair', async () => {
+    const transport = new RecordingTransport(() => okResponse({ verdicts: [] }));
+    const port = new WorkerCorpusRelationVerdict({ transport });
+    const response = await port.verdict(request);
+    expect(transport.sent).toHaveLength(1);
+    expect(response.batchesSent).toBe(1);
+    expect(response.failedBatches).toBeUndefined();
   });
 });

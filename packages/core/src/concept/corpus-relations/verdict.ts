@@ -269,8 +269,30 @@ export interface CorpusVerdict {
   readonly bKey?: string;
 }
 
+/**
+ * One request batch a port could not answer (`ol-egov.141.89.3.61`). Counts and a reason code only
+ * (D-005): never a concept name, a passage or an error message, which can echo content.
+ */
+export interface CorpusVerdictBatchFailure {
+  /** How many candidate pairs that batch carried; none of them has a verdict in this response. */
+  readonly candidates: number;
+  /** The refusal code when the Worker gave one, else the error's class name. */
+  readonly reason: string;
+}
+
 export interface CorpusVerdictResponse {
   readonly verdicts: readonly CorpusVerdict[];
+  /**
+   * `ol-egov.141.89.3.61`: how many requests the port split the call into. Absent means one request
+   * (a port that never splits).
+   */
+  readonly batchesSent?: number;
+  /**
+   * `ol-egov.141.89.3.61`: the batches that failed while at least one other batch answered. Absent
+   * or empty means every batch answered. A port whose every batch failed throws instead, as it
+   * always has.
+   */
+  readonly failedBatches?: readonly CorpusVerdictBatchFailure[];
 }
 
 /**
