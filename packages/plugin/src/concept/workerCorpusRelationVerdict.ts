@@ -129,15 +129,14 @@ export class WorkerCorpusRelationVerdictError extends Error {
 /**
  * The declared ceiling on one `concepts.relations.v1` request payload, in UTF-8 bytes of the
  * serialized `{ endpoints, candidates }` body (`ol-egov.141.89.3.61`). A DECLARED number, never
- * fitted: the only input limit the service states is `MAX_INPUT_TOKENS = 64_000`
- * (`olea-service/src/ai/jevClient.ts`, the System One client; `src/tasks/conceptsRelations.ts`
- * validates no size and the Worker imposes none on this task). Taking that limit as the working
- * ceiling for any one model call: 64,000 tokens less about 2,000 for the system prompt leaves
- * 62,000; at a conservative 3 bytes per token (prose runs nearer 4; markup, maths and non-Latin
- * text nearer 3) that is 186,000 bytes, and a request is held to about 70% of it. A single pair
- * is at most two passages of `RELATIONS_ENDPOINT_CHAR_BUDGET` (8,000) characters, 64,000 bytes at
- * the 4-bytes-per-character worst case, so one pair always fits. Revisit when the pinned model's
- * input limit changes or the service starts to validate request size.
+ * fitted, and a reversible default: no input limit is declared for this task's model anywhere in
+ * the service (`src/tasks/conceptsRelations.ts` validates no size and the Worker imposes none),
+ * so the bound is set conservatively, not derived from a pinned model. 128,000 bytes is about 32k
+ * to 43k tokens at 3 to 4 bytes per token: inside the input window of any model considered for the
+ * task, and far below the 1.84 MB request course A's development read produced. A single pair is
+ * at most two passages of `RELATIONS_ENDPOINT_CHAR_BUDGET` (8,000) characters, 64,000 bytes at the
+ * 4-bytes-per-character worst case, so one pair always fits. Revisit when the task's model and its
+ * input limit are pinned, or the service starts to validate request size.
  */
 export const CORPUS_RELATION_REQUEST_CEILING_BYTES = 128_000;
 
