@@ -128,17 +128,35 @@ export class WorkerCorpusRelationVerdictError extends Error {
 
 /**
  * The declared ceiling on one `concepts.relations.v1` request payload, in UTF-8 bytes of the
- * serialized `{ endpoints, candidates }` body (`ol-egov.141.89.3.61`). A DECLARED number, never
- * fitted, and a reversible default: no input limit is declared for this task's model anywhere in
- * the service (`src/tasks/conceptsRelations.ts` validates no size and the Worker imposes none),
- * so the bound is set conservatively, not derived from a pinned model. 128,000 bytes is about 32k
- * to 43k tokens at 3 to 4 bytes per token: inside the input window of any model considered for the
- * task, and far below the 1.84 MB request course A's development read produced. A single pair is
- * at most two passages of `RELATIONS_ENDPOINT_CHAR_BUDGET` (8,000) characters, 64,000 bytes at the
- * 4-bytes-per-character worst case, so one pair always fits. Revisit when the task's model and its
- * input limit are pinned, or the service starts to validate request size.
+ * serialized `{ endpoints, candidates }` body (`ol-egov.141.89.3.61`). This transport budget is
+ * independent of the expanded-prompt budget below: dictionary entries travel once, but the
+ * service repeats both endpoints for every pair. Retained alongside the model input bound.
  */
 export const CORPUS_RELATION_REQUEST_CEILING_BYTES = 128_000;
+
+/**
+ * Mirrors `olea-service/src/tasks/conceptsRelations.ts`'s
+ * `CORPUS_RELATIONS_PROMPT_CEILING_BYTES` (`ol-egov.141.89.3.62`):
+ * floor(0.75 * (256,000 context tokens - 28,672 output tokens)) * 3 bytes/token = 511,488.
+ * This constant MUST change with the service's model/window/output ceiling. No runtime service
+ * dependency: the client budgets system plus user UTF-8 bytes before sending a request.
+ */
+export const CORPUS_RELATIONS_PROMPT_CEILING_BYTES = 511_488;
+
+/**
+ * Bounds checked against the two service files above and
+ * `olea-service/prompts/concepts.relations/system.prompt.md` on 2026-10-26. The system text is
+ * 9,542 UTF-8 bytes; the fixed user instructions fit in 2,048. Keep these bounds in sync with
+ * those texts. Passage rendering is delegated by the service: reserve 512 bytes per possible
+ * rendered passage for numbering, separators, spoken-source roles, all three uncertainty flags,
+ * and empty/stub notices. Flagged claims can split one source chunk into at most 2N + 1 passages
+ * (N claims and N + 1 intervening spans). Text itself is counted in full, never truncated.
+ */
+const RELATIONS_SYSTEM_PROMPT_BUDGET_BYTES = 16_384;
+const RELATIONS_USER_INSTRUCTIONS_BUDGET_BYTES = 2_048;
+const RELATIONS_SOURCE_WRAPPER_BUDGET_BYTES = 512;
+const RELATIONS_FIXED_PROMPT_BUDGET_BYTES =
+  RELATIONS_SYSTEM_PROMPT_BUDGET_BYTES + RELATIONS_USER_INSTRUCTIONS_BUDGET_BYTES;
 
 const utf8 = new TextEncoder();
 
@@ -148,13 +166,39 @@ function jsonBytes(value: unknown): number {
 
 type VerdictCandidate = CorpusVerdictRequest['candidates'][number];
 
+/** Includes the inter-pair separator, even for the last pair (a two-byte overestimate). */
+function pairPromptWrapperBytes(pairNumber: number): number {
+  return utf8.encode(`Pair ${pairNumber}:\n\n\n\n\n`).length;
+}
+
+function endpointPromptBytes(endpoint: WireEndpoint): number {
+  const aliases =
+    endpoint.aliases.length > 0 ? ` (also known as: ${endpoint.aliases.join(', ')})` : '';
+  // Labels a and b have identical byte lengths. These are formatEndpoint's exact wrappers.
+  const heading = `Concept a: "${endpoint.name}"${aliases}\nSource material for a:\n`;
+  return (
+    utf8.encode(heading).length +
+    endpoint.sourceChunks.reduce((sum, text, index) => {
+      const claims = endpoint.sourceChunkOrigins?.[index]?.flaggedClaims?.length ?? 0;
+      // Also covers replacement characters if a UTF-16 claim boundary splits a surrogate pair.
+      return (
+        sum +
+        utf8.encode(text).length +
+        4 * claims +
+        (2 * claims + 1) * RELATIONS_SOURCE_WRAPPER_BUDGET_BYTES
+      );
+    }, 0)
+  );
+}
+
 /**
  * Splits a call's candidate pairs into request batches whose serialized payload stays under
- * `ceilingBytes`, each pair whole (its two endpoints always travel together). Pairs are grouped
- * by the documents their endpoints came from (first endpoint's document, then the second's), so a
- * document's concepts fall in the same batch where the ceiling allows and each endpoint's passage
- * is sent once per batch rather than once per pair. Deterministic: ties keep the nominated order.
- * An empty input gives no batches; a pair larger than the ceiling travels alone.
+ * `ceilingBytes` AND whose expanded prompt estimate stays under
+ * `CORPUS_RELATIONS_PROMPT_CEILING_BYTES`, each pair whole. Pairs are grouped by their endpoints'
+ * documents (first endpoint, then second); ties keep the nominated order. Dictionary entries
+ * count once toward the payload but once PER PAIR toward the prompt. An empty input gives no
+ * batches. A pair larger than either ceiling is isolated; a prompt-oversized singleton becomes
+ * a local batch failure in `verdict`, without being sent or truncating its passages.
  */
 export function planCorpusRelationBatches(
   candidates: readonly VerdictCandidate[],
@@ -172,40 +216,63 @@ export function planCorpusRelationBatches(
     .map(({ candidate }) => candidate);
 
   const emptyBytes = jsonBytes({ endpoints: {}, candidates: [] });
-  /** Bytes a pair adds to a batch that already holds the endpoints named in `present`. */
-  const costOf = (candidate: VerdictCandidate, present: ReadonlySet<string>): number => {
-    const fresh = [candidate.a, candidate.b].filter(
-      (endpoint, i, all) =>
-        !present.has(endpoint.name) && all.findIndex((e) => e.name === endpoint.name) === i,
-    );
-    return (
-      fresh.reduce(
-        (sum, endpoint) =>
-          sum + jsonBytes(toWireEndpoint(endpoint, frontmatterHost)) + jsonBytes(endpoint.name) + 1,
-        0,
-      ) +
-      jsonBytes({ a: candidate.a.name, b: candidate.b.name }) +
-      1
-    );
+  interface EndpointBytes {
+    readonly payload: number;
+    readonly prompt: number;
+  }
+  /** Resolve reused names to their FIRST dictionary entry, just like buildDictionaryPayload. */
+  const costOf = (
+    candidate: VerdictCandidate,
+    present: ReadonlyMap<string, EndpointBytes>,
+    pairNumber: number,
+  ) => {
+    const fresh = new Map<string, EndpointBytes>();
+    const sizeOf = (endpoint: VerdictCandidate['a']): EndpointBytes => {
+      const known = present.get(endpoint.name) ?? fresh.get(endpoint.name);
+      if (known !== undefined) return known;
+      const wire = toWireEndpoint(endpoint, frontmatterHost);
+      const size = {
+        payload: jsonBytes(wire) + jsonBytes(endpoint.name) + 1,
+        prompt: endpointPromptBytes(wire),
+      };
+      fresh.set(endpoint.name, size);
+      return size;
+    };
+    const a = sizeOf(candidate.a);
+    const b = sizeOf(candidate.b);
+    return {
+      fresh,
+      payload:
+        [...fresh.values()].reduce((sum, size) => sum + size.payload, 0) +
+        jsonBytes({ a: candidate.a.name, b: candidate.b.name }) +
+        1,
+      prompt: pairPromptWrapperBytes(pairNumber) + a.prompt + b.prompt,
+    };
   };
 
   const batches: VerdictCandidate[][] = [];
   let current: VerdictCandidate[] = [];
-  let present = new Set<string>();
+  let present = new Map<string, EndpointBytes>();
   let bytes = emptyBytes;
+  let promptBytes = RELATIONS_FIXED_PROMPT_BUDGET_BYTES;
   for (const candidate of ordered) {
-    let cost = costOf(candidate, present);
-    if (current.length > 0 && bytes + cost > ceilingBytes) {
+    let cost = costOf(candidate, present, current.length + 1);
+    if (
+      current.length > 0 &&
+      (bytes + cost.payload > ceilingBytes ||
+        promptBytes + cost.prompt > CORPUS_RELATIONS_PROMPT_CEILING_BYTES)
+    ) {
       batches.push(current);
       current = [];
-      present = new Set();
+      present = new Map();
       bytes = emptyBytes;
-      cost = costOf(candidate, present);
+      promptBytes = RELATIONS_FIXED_PROMPT_BUDGET_BYTES;
+      cost = costOf(candidate, present, 1);
     }
-    bytes += cost;
+    bytes += cost.payload;
+    promptBytes += cost.prompt;
     current.push(candidate);
-    present.add(candidate.a.name);
-    present.add(candidate.b.name);
+    for (const [name, size] of cost.fresh) present.set(name, size);
   }
   if (current.length > 0) batches.push(current);
   return batches;
@@ -222,6 +289,30 @@ export function corpusRelationPayloadBytes(
 ): number {
   const { endpoints, candidates: wire } = buildDictionaryPayload(candidates, frontmatterHost);
   return jsonBytes({ endpoints, candidates: wire });
+}
+
+/**
+ * Upper bound on the service's expanded system + user prompt, for preflight and tests. Resolve
+ * names as the dictionary does, then repeat BOTH endpoint sizes per pair, including aliases,
+ * passages, annotations and decimal pair numbers. Opaque keys are not rendered by the service.
+ */
+export function corpusRelationPromptBytes(
+  candidates: readonly VerdictCandidate[],
+  frontmatterHost?: SourceOriginFrontmatterHost,
+): number {
+  const endpoints = new Map<string, number>();
+  const sizeOf = (endpoint: VerdictCandidate['a']): number => {
+    const known = endpoints.get(endpoint.name);
+    if (known !== undefined) return known;
+    const bytes = endpointPromptBytes(toWireEndpoint(endpoint, frontmatterHost));
+    endpoints.set(endpoint.name, bytes);
+    return bytes;
+  };
+  return candidates.reduce(
+    (sum, candidate, index) =>
+      sum + pairPromptWrapperBytes(index + 1) + sizeOf(candidate.a) + sizeOf(candidate.b),
+    RELATIONS_FIXED_PROMPT_BUDGET_BYTES,
+  );
 }
 
 export interface WorkerCorpusRelationVerdictDeps {
@@ -329,7 +420,8 @@ export class WorkerCorpusRelationVerdict implements CorpusRelationVerdictPort {
   /**
    * `ol-egov.141.89.3.61`: the call is split into request batches under the declared ceiling
    * (`planCorpusRelationBatches`), sent one after another, each failing on its own. A batch that
-   * fails is recorded in `failedBatches` and the others' verdicts are kept. When EVERY batch
+   * fails is recorded in `failedBatches` and the others' verdicts are kept. A pair whose prompt
+   * cannot fit alone uses that same failure path locally, before transport. When EVERY batch
    * fails (always the case for a one-batch call) the first error is thrown, as before.
    */
   async verdict(request: CorpusVerdictRequest): Promise<CorpusVerdictResponse> {
@@ -350,6 +442,14 @@ export class WorkerCorpusRelationVerdict implements CorpusRelationVerdictPort {
     let firstError: WorkerCorpusRelationVerdictError | undefined;
     for (const batch of batches) {
       try {
+        const promptBytes = corpusRelationPromptBytes(batch, this.frontmatterHost);
+        if (promptBytes > CORPUS_RELATIONS_PROMPT_CEILING_BYTES) {
+          throw new WorkerCorpusRelationVerdictError(
+            `WorkerCorpusRelationVerdict: a single pair's estimated prompt is ${promptBytes} ` +
+              `bytes, over the ${CORPUS_RELATIONS_PROMPT_CEILING_BYTES}-byte ceiling.`,
+            'prompt-too-large',
+          );
+        }
         verdicts.push(...(await this.sendBatch(batch)));
       } catch (error) {
         const wrapped =
