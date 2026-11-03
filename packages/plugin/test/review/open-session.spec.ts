@@ -107,7 +107,7 @@ const DEVICE = 'olea-testdevice1';
 
 /** The v6 belief stamp's version at the attainment defaults and the declared scheduler (`ol-95vv.13`), spelled out. */
 const BELIEF_STAMP_VERSION =
-  'att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1';
+  'att-fold-1;sapling=strict-unaided-recall;withheld=count;scheduler=fsrs6-declared-1';
 
 /**
  * `ol-63e1`: `conceptIds`/`masteryAtTime`/a study plan's `conceptId` carry
@@ -746,6 +746,7 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
         conceptIds: [unboundKey('Alpha')],
         rating: 'good',
         wasUnsure: false,
+        supportLevelShown: 'independent', // unaided recall: a qualifying day ([D-346], [D-458])
         durationMs: null,
         selectionContext: {
           dueState: 'new',
@@ -766,6 +767,7 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
         conceptIds: [unboundKey('Alpha')],
         rating: 'good',
         wasUnsure: false,
+        supportLevelShown: 'independent', // unaided recall: a qualifying day ([D-346], [D-458])
         durationMs: null,
         selectionContext: {
           dueState: 'new',
@@ -2004,6 +2006,7 @@ describe('F2.21 — the strong-recall proposal is composed into every opened ses
           conceptIds: [unboundKey('Alpha')],
           rating: 'good',
           wasUnsure: false,
+          supportLevelShown: 'independent', // unaided recall: a qualifying day ([D-346], [D-458])
           durationMs: null,
           selectionContext: {
             dueState: 'due',

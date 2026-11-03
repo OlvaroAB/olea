@@ -35,8 +35,9 @@ describe('buildFixtureOracle — real mastery over the fixture vault’s own his
       Imbrication: 'tree',
       // Genuinely untouched — a real "new", not a fabricated one.
       'Hummocky stratification': 'seed',
-      // Recognition-only (MCQ) practice, capped below `tree` by C5.4's own rule.
-      Bioturbation: 'sapling',
+      // Recognition-only (MCQ) practice: successes on many days still read `sprout` under the
+      // ruled default (strict unaided recall, [D-346]/[D-458]); no recall day, so no sapling.
+      Bioturbation: 'sprout',
       // Lowest raw yield, ten attempts, successes on only two distinct days —
       // one short of the declared spacing gate, so it has never yet been
       // "recalled reliably across spaced attempts". The effort-imbalance half

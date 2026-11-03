@@ -84,17 +84,47 @@ function explainBack(
   });
 }
 
-describe('[D-346] sapling rule — default is today’s rule (the ruling is open)', () => {
-  it('the default is any scored success on three distinct days', () => {
-    expect(DEFAULT_SAPLING_RULE).toBe('any-scored-success');
+describe('[D-346] / [D-458] sapling rule — the default is the ruled strict unaided recall', () => {
+  it('the default is strict-unaided-recall on three distinct days', () => {
+    expect(DEFAULT_SAPLING_RULE).toBe('strict-unaided-recall');
   });
 
-  it('quiz answers alone on three days read sapling under the default, exactly as before', () => {
+  it('recognition-only (multiple-choice) successes on three distinct days do not reach sapling', () => {
     const entries = onDays(THREE_DAYS, () => ({
       instrumentId: 'mcq:concept-a:1',
       instrumentType: 'mcq',
     }));
+    const reading = computeConceptMastery(entries, 'concept-a');
+    expect(reading.state).toBe('sprout');
+    expect(reading.evidence.qualifyingRecallSuccessDays).toBe(0);
+    // They still count as scored successes and practice: nothing is a failure.
+    expect(reading.evidence.scoredSuccessCount).toBe(3);
+    // The earlier rule stays selectable, for a record stamped with it.
+    expect(
+      computeConceptMastery(entries, 'concept-a', { saplingRule: 'any-scored-success' }).state,
+    ).toBe('sapling');
+  });
+
+  it('a recall item answered unaided on three distinct days reaches sapling under the default', () => {
+    const entries = onDays(THREE_DAYS, () => ({ supportLevelShown: 'independent' }));
     expect(computeConceptMastery(entries, 'concept-a').state).toBe('sapling');
+  });
+
+  it('a day with answer-bearing guidance, or uncertain assistance, does not count and is never a failure', () => {
+    const guided = onDays(THREE_DAYS, () => ({ supportLevelShown: 'guided' }));
+    const uncertain = onDays(THREE_DAYS, () => ({ supportLevelShown: 'prompted' }));
+    for (const entries of [guided, uncertain]) {
+      const reading = computeConceptMastery(entries, 'concept-a');
+      expect(reading.state).toBe('sprout');
+      expect(reading.evidence.qualifyingRecallSuccessDays).toBe(0);
+      expect(reading.evidence.scoredSuccessCount).toBe(3);
+      expect(reading.evidence.correctedAttemptCount ?? 0).toBe(0);
+    }
+    // Two qualifying days plus a guided third day: the guided day adds nothing.
+    const mixed = onDays(THREE_DAYS, (i) => ({
+      supportLevelShown: i === 2 ? 'guided' : 'independent',
+    }));
+    expect(computeConceptMastery(mixed, 'concept-a').state).toBe('sprout');
   });
 });
 

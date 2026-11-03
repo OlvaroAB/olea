@@ -606,6 +606,11 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
         wasUnsure,
         durationMs,
         selectionContext,
+        // A persona answers a recall item unaided: a qualifying recall day under the ruled
+        // sapling rule ([D-346], [D-458]). Quiz (mcq) answers are recognition-tier and carry none.
+        ...(instrument.instrumentType === 'qa' || instrument.instrumentType === 'cloze'
+          ? { supportLevelShown: 'independent' as const }
+          : {}),
         ...(perConcept === undefined ? {} : { masteryAtTime: perConcept }),
       };
       pendingEntries.push(record);

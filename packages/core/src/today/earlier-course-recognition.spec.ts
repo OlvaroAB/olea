@@ -42,6 +42,8 @@ function review(
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    // Unaided recall: a qualifying recall day under the ruled default ([D-346], [D-458]).
+    supportLevelShown: 'independent',
     ...overrides,
   };
 }
@@ -319,15 +321,22 @@ describe('[D-387] the dated line at a preserved cutoff, apart from the current r
   });
 
   it('a later arithmetic or rule version change does not move the dated line', () => {
-    // Recorded under the default sapling rule, where quiz answers on three
-    // days reach sapling; the current reading now runs under unaided recall,
-    // where they count toward sprout only.
+    // Recorded under the earlier any-scored-success rule, where guided (answer-bearing) successes on
+    // three days reach sapling; the current reading runs under the ruled default (strict unaided
+    // recall, [D-346]/[D-458]), where they count toward sprout only.
+    const guided = beforeCutoff.map((e) => ({ ...e, supportLevelShown: 'guided' as const }));
     const [rec] = buildEarlierCourseRecognitions({
       newCourse: 'NEW1',
-      entries: beforeCutoff,
+      entries: guided,
       concepts,
-      options: { saplingRule: 'unaided-recall' },
-      cutoffRecords: [cutoff()],
+      cutoffRecords: [
+        cutoff({
+          arithmeticVersion: attainmentArithmeticVersion({
+            saplingRule: 'any-scored-success',
+            withheldEvidence: 'count',
+          }),
+        }),
+      ],
     });
     expect(rec?.state).toBe('sprout');
     expect(rec?.historical[0]?.state).toBe('sapling');

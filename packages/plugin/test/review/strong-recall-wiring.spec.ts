@@ -51,6 +51,8 @@ function review(overrides: {
       instrumentTypesOffered: [instrumentType],
       planVersion: null,
     },
+    // Unaided recall: a qualifying recall day under the ruled default ([D-346], [D-458]).
+    supportLevelShown: 'independent',
     conceptIds: [...overrides.conceptIds],
     // `[D-281]`: a graded explain-back only qualifies the top stage with all
     // four pieces of evidence on the one attempt — this fixture's graded

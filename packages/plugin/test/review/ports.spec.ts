@@ -839,7 +839,8 @@ describe('createVaultReviewLogPort — the v6 belief stamp: both axes and the ar
   const DAY = 24 * 60 * 60 * 1000;
   const START = Date.parse('2026-03-02T15:00:00Z');
   /** The attainment arithmetic at its defaults with the declared scheduler, spelled out. */
-  const VERSION = 'att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1';
+  const VERSION =
+    'att-fold-1;sapling=strict-unaided-recall;withheld=count;scheduler=fsrs6-declared-1';
 
   const SELECTION_CONTEXT: SelectionContextV4 = {
     dueState: 'due',
@@ -878,6 +879,8 @@ describe('createVaultReviewLogPort — the v6 belief stamp: both axes and the ar
       wasUnsure: false,
       durationMs: 900,
       selectionContext: SELECTION_CONTEXT,
+      // Unaided recall: a qualifying day under the ruled default ([D-346], [D-458]).
+      supportLevel: { level: 'independent', provenance: 'not-offered' },
       ...(reviewEventId !== undefined ? { reviewEventId } : {}),
     });
     const parsed = parseReviewLog(

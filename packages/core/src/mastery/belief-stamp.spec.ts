@@ -45,7 +45,7 @@ const T4 = '2026-01-20T09:00:00-04:00';
  * rebuilt from `attainmentArithmeticVersion`, so a silent change to the string
  * a stamp records goes red here.
  */
-const DEFAULT_VERSION = `att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1`;
+const DEFAULT_VERSION = `att-fold-1;sapling=strict-unaided-recall;withheld=count;scheduler=fsrs6-declared-1`;
 
 const scheduler: Scheduler = createFsrsScheduler();
 
@@ -221,7 +221,7 @@ describe('masteryAtTimeStamp — reads the arithmetic its version names ([D-338]
       options: { withheldEvidence: 'drop-from-every-current-reading' },
     });
     expect(value.arithmeticVersion).toBe(
-      'att-fold-1;sapling=any-scored-success;withheld=drop-from-every-current-reading;scheduler=fsrs6-declared-1',
+      'att-fold-1;sapling=strict-unaided-recall;withheld=drop-from-every-current-reading;scheduler=fsrs6-declared-1',
     );
   });
 
@@ -231,7 +231,7 @@ describe('masteryAtTimeStamp — reads the arithmetic its version names ([D-338]
       scheduler: unversioned,
     });
     expect(value.arithmeticVersion).toBe(
-      'att-fold-1;sapling=any-scored-success;withheld=count;scheduler=unknown',
+      'att-fold-1;sapling=strict-unaided-recall;withheld=count;scheduler=unknown',
     );
     expect(value.vitalityByConcept).toEqual({ 'concept-a': 'holding' });
   });

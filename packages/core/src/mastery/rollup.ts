@@ -315,8 +315,8 @@ export const ADMITTED_SUPPORT_LEVELS: readonly SupportLevel[] = ['independent', 
  * three options the ruling chooses between, each built so a case can record
  * the answer under each:
  *
- * - `'any-scored-success'` — (a), **today's rule and the default until the
- *   ruling lands**: any non-explain-back success (quiz answers, and recall at
+ * - `'any-scored-success'` — (a), the rule before the ruling (no longer the
+ *   default; a record stamped with it replays as written): any non-explain-back success (quiz answers, and recall at
  *   any support level) on `minSpacedRetrievalDays` distinct days.
  * - `'unaided-recall'` — (b), the chain spec's recommendation: recall-tier
  *   successes shown at `independent` or `prompted` support on that many
@@ -342,8 +342,8 @@ export const ADMITTED_SUPPORT_LEVELS: readonly SupportLevel[] = ['independent', 
  *   `'unaided-recall'` keeps the reading before the ruling, so a record
  *   stamped with it replays as it was written and no award is silently rewritten.
  *
- * Adopting (b) or (c) lowers some concepts from sapling to sprout once, which
- * F2.11 forbids unless ruled: that is why the default stays (a).
+ * `'strict-unaided-recall'` is the default (`[D-346]`, `[D-458]`). It lowers some
+ * concepts from sapling to sprout once, which F2.11 forbids unless ruled: here it is ruled.
  */
 export type SaplingRule =
   | 'any-scored-success'
@@ -351,8 +351,8 @@ export type SaplingRule =
   | 'strict-unaided-recall'
   | 'mix-with-unaided-recall';
 
-/** `[D-346]` is open: today's rule. See {@link SaplingRule}. */
-export const DEFAULT_SAPLING_RULE: SaplingRule = 'any-scored-success';
+/** `[D-346]` ruled with `[D-458]`: qualifying (strict, unaided) recall days. See {@link SaplingRule}. */
+export const DEFAULT_SAPLING_RULE: SaplingRule = 'strict-unaided-recall';
 
 const SAPLING_RULES: readonly SaplingRule[] = [
   'any-scored-success',
@@ -465,7 +465,7 @@ export interface MasteryRollupOptions {
   readonly invalidInstrumentIds?: readonly string[];
   /**
    * `[D-346]`, open: which successes count toward `sapling`. Defaults to
-   * {@link DEFAULT_SAPLING_RULE}, today's rule. See {@link SaplingRule}.
+   * {@link DEFAULT_SAPLING_RULE}, the ruled rule. See {@link SaplingRule}.
    */
   readonly saplingRule?: SaplingRule;
   /**

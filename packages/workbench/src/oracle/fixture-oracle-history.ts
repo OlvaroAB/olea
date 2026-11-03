@@ -11,7 +11,7 @@
  *
  *   - Imbrication (concept-prov1:05 Zettelkasten/Imbrication.md) -> tree, 7 event(s)
  *   - Hummocky stratification (concept-prov1:05 Zettelkasten/Hummocky stratification.md) -> seed, 0 event(s)
- *   - Bioturbation (concept-prov1:05 Zettelkasten/Bioturbation.md) -> sapling, 5 event(s)
+ *   - Bioturbation (concept-prov1:05 Zettelkasten/Bioturbation.md) -> sprout, 5 event(s) (recognition-only: [D-346]/[D-458])
  *   - Paraconformity (concept-prov1:05 Zettelkasten/Paraconformity.md) -> sprout, 10 event(s)
  *   - Appoggiatura (concept-prov1:05 Zettelkasten/Appoggiatura.md) -> sapling, 7 event(s)
  *
@@ -43,6 +43,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -62,6 +63,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -81,6 +83,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -100,6 +103,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -119,6 +123,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -138,6 +143,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -290,6 +296,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -309,6 +316,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -328,6 +336,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -347,6 +356,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -366,6 +376,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -385,6 +396,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -404,6 +416,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -423,6 +436,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -442,6 +456,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -461,6 +476,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -480,6 +496,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -499,6 +516,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -518,6 +536,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -537,6 +556,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -556,6 +576,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -575,6 +596,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
   {
     schemaVersion: 6,
@@ -594,5 +616,6 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    supportLevelShown: 'independent', // unaided recall ([D-346], [D-458])
   },
 ];

@@ -104,6 +104,8 @@ function review(overrides: {
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    // Unaided recall: a qualifying recall day under the ruled default ([D-346], [D-458]).
+    supportLevelShown: 'independent',
     conceptIds: [...overrides.conceptIds],
   } as unknown as ReviewLogEntry;
 }

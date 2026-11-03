@@ -24,7 +24,7 @@
                     "weakest": null,
                     "instrumentsRead": 0,
                     "thinEvidenceInstrumentIds": [],
-                    "arithmeticVersion": "att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1"
+                    "arithmeticVersion": "att-fold-1;sapling=strict-unaided-recall;withheld=count;scheduler=fsrs6-declared-1"
                   }
                 },
                 "readiness": {
@@ -99,7 +99,7 @@
                     "weakest": null,
                     "instrumentsRead": 0,
                     "thinEvidenceInstrumentIds": [],
-                    "arithmeticVersion": "att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1"
+                    "arithmeticVersion": "att-fold-1;sapling=strict-unaided-recall;withheld=count;scheduler=fsrs6-declared-1"
                   }
                 },
                 "readiness": {
@@ -143,7 +143,7 @@
                     "weakest": null,
                     "instrumentsRead": 0,
                     "thinEvidenceInstrumentIds": [],
-                    "arithmeticVersion": "att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1"
+                    "arithmeticVersion": "att-fold-1;sapling=strict-unaided-recall;withheld=count;scheduler=fsrs6-declared-1"
                   }
                 },
                 "readiness": {
@@ -203,7 +203,7 @@
                     "weakest": null,
                     "instrumentsRead": 0,
                     "thinEvidenceInstrumentIds": [],
-                    "arithmeticVersion": "att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1"
+                    "arithmeticVersion": "att-fold-1;sapling=strict-unaided-recall;withheld=count;scheduler=fsrs6-declared-1"
                   }
                 },
                 "readiness": {
@@ -414,7 +414,7 @@
                     "weakest": null,
                     "instrumentsRead": 0,
                     "thinEvidenceInstrumentIds": [],
-                    "arithmeticVersion": "att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1"
+                    "arithmeticVersion": "att-fold-1;sapling=strict-unaided-recall;withheld=count;scheduler=fsrs6-declared-1"
                   }
                 },
                 "readiness": {
@@ -489,7 +489,7 @@
                     "weakest": null,
                     "instrumentsRead": 0,
                     "thinEvidenceInstrumentIds": [],
-                    "arithmeticVersion": "att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1"
+                    "arithmeticVersion": "att-fold-1;sapling=strict-unaided-recall;withheld=count;scheduler=fsrs6-declared-1"
                   }
                 },
                 "readiness": {

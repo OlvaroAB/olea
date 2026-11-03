@@ -63,6 +63,8 @@ function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    // Unaided recall: a qualifying recall day under the ruled default ([D-346], [D-458]).
+    supportLevelShown: 'independent',
     ...overrides,
   };
 }
@@ -146,24 +148,32 @@ describe('computeConceptMastery — recognition-only concept caps at sapling (na
       rating: 'good',
     }));
     const result = computeConceptMastery(entries, 'concept-a');
-    expect(result.state).toBe('sapling');
+    // [D-346]/[D-458]: recognition-only successes never reach sapling under the ruled default;
+    // the R7 cap (nothing above sapling without recall) holds a fortiori.
+    expect(result.state).toBe('sprout');
     expect(result.evidence.recognitionOnly).toBe(true);
+    expect(
+      computeConceptMastery(entries, 'concept-a', { saplingRule: 'any-scored-success' }).state,
+    ).toBe('sapling');
   });
 
   it('a mixed-in recall success clears `recognitionOnly` but still cannot reach `tree` (MAT-6: only the depth gate can)', () => {
-    const mcq = onConsecutiveDays('2026-01-01', 19, () => ({
+    const mcq = onConsecutiveDays('2026-01-01', 17, () => ({
       instrumentType: 'mcq',
       instrumentId: 'mcq:concept-a:1',
       rating: 'good',
     }));
-    const recall = review({
-      eventId: 'd-recall',
-      timestamp: '2026-01-20T09:00:00-04:00',
-      instrumentType: 'qa',
-      instrumentId: 'qa:concept-a:1',
-      rating: 'good',
-    });
-    const result = computeConceptMastery([...mcq, recall], 'concept-a');
+    // [D-346]/[D-458]: three distinct unaided recall days are what lift the stage to sapling.
+    const recalls = ['2026-01-20', '2026-01-22', '2026-01-25'].map((day) =>
+      review({
+        eventId: `d-recall-${day}`,
+        timestamp: `${day}T09:00:00-04:00`,
+        instrumentType: 'qa',
+        instrumentId: 'qa:concept-a:1',
+        rating: 'good',
+      }),
+    );
+    const result = computeConceptMastery([...mcq, ...recalls], 'concept-a');
     expect(result.evidence.recognitionOnly).toBe(false);
     expect(result.state).toBe('sapling');
   });

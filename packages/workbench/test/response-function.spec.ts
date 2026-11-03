@@ -91,6 +91,7 @@ describe('claim REFUTED by the ratified model: the growth stage does not fall af
       entries.push(
         reviewEntry({
           eventId: nextId(),
+          independent: true,
           conceptId: CONCEPT_A,
           day: days[i] as string,
           rating: 'good',

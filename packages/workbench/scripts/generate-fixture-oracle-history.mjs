@@ -96,8 +96,8 @@
 //     Zero events -> `seed`, honestly: she really has not studied this one,
 //     and a genuine "new" belongs in the spread too.
 //   Bioturbation                                     — RECOGNISED, NOT RECALLED.
-//     Five spaced MCQ successes -> capped at `sapling` (C5.4's
-//     recognition-only ceiling), never `tree`.
+//     Five spaced MCQ successes -> `sprout`: recognition-only successes carry no
+//     qualifying recall day under the ruled sapling rule ([D-346], [D-458]).
 //   Paraconformity (lowest pre-mastery yield)         — OVER-STUDIED, STILL WEAK.
 //     Ten qa attempts, but the RECENT window is mostly `again`/`hard` ->
 //     `sprout`. Effort spent, recall not holding — the effort-imbalance
@@ -240,7 +240,7 @@ const STORIES = [
   },
   {
     notePath: '05 Zettelkasten/Bioturbation.md',
-    expectedState: 'sapling',
+    expectedState: 'sprout',
     events: [
       { date: '2026-06-05', instrumentType: 'mcq', rating: 'good' },
       { date: '2026-06-12', instrumentType: 'mcq', rating: 'good' },
@@ -345,7 +345,10 @@ function buildRecords(conceptKey, notePath, events) {
       // (the tree route) carry it.
       ...(event.supportLevelShown !== undefined
         ? { supportLevelShown: event.supportLevelShown }
-        : {}),
+        : event.instrumentType === 'qa'
+          ? // Unaided recall: a qualifying recall day under the ruled sapling rule ([D-346], [D-458]).
+            { supportLevelShown: 'independent' }
+          : {}),
       ...(isExplainBack
         ? {
             explainBackGrade: {
